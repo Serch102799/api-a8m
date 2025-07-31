@@ -136,7 +136,7 @@ router.post('/', /* Sin verifyToken ni checkRole temporalmente */ [
     const result = await pool.query(
       `INSERT INTO empleado 
        (nombre, puesto, departamento, nombre_usuario, contrasena_hash, estado_cuenta, rol)
-       VALUES ($1, $2, $3, $4, $5, 'Activo', $6)
+       VALUES ($1, $2, $3, $4, $5, 'Activo', $7) -- ✅ Corregido a $7
        RETURNING id_empleado, nombre, puesto, rol`,
       [
         Nombre,
@@ -144,7 +144,8 @@ router.post('/', /* Sin verifyToken ni checkRole temporalmente */ [
         Departamento,
         Nombre_Usuario,
         hashedPassword,
-        rol || 'Almacenista'
+        'Activo', // El valor para $6
+        rol || 'Almacenista' // ✅ El valor para $7
       ]
     );
     res.status(201).json(result.rows[0]);
