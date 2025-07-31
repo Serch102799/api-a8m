@@ -23,10 +23,20 @@ const reportesRouter = require('./routes/reportes');
 
 const app = express();
 
-app.use(cors({
-  origin: 'http://localhost:4200',
-  credentials: true
-}));
+const whiteList = [
+    'http://localhost:4200',        
+    'https://sge-10.vercel.app'     
+];
+const corsOptions = {
+    origin: function (origin, callback) {
+        if (whiteList.indexOf(origin) !== -1 || !origin) {
+            callback(null, true);
+        } else {
+            callback(new Error('No permitido por CORS'));
+        }
+    }
+};
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
@@ -58,8 +68,8 @@ app.get('/swagger.json', (req, res) => {
 });
 
 // Iniciar servidor
-app.listen(3000, () => {
-  console.log('Servidor corriendo en http://localhost:3000');
-  console.log('Documentación Swagger en http://localhost:3000/api-docs');
-  console.log('JSON exportable en http://localhost:3000/swagger.json');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en el puerto ${PORT}`);
+  console.log(`Documentación Swagger en http://localhost:${PORT}/api-docs`);
 });
