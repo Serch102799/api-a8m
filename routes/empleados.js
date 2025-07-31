@@ -112,7 +112,7 @@ router.get('/usuario/:nombreUsuario', async (req, res) => {
  *       201:
  *         description: Empleado creado exitosamente
  */
-router.post('/', checkRole(['Admin']), [
+router.post('/', /* checkRole(['Admin']),  */[
   body('Nombre').notEmpty().withMessage('Nombre es requerido'),
   body('Nombre_Usuario').notEmpty().withMessage('Nombre_Usuario es requerido'),
   body('Contrasena_Hash').notEmpty().withMessage('Contrasena es requerida'),
