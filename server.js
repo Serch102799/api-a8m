@@ -28,12 +28,17 @@ const whiteList = [
     'https://sge-10.vercel.app'     
 ];
 const corsOptions = {
-    origin: function (origin, callback) {
-        if (whiteList.indexOf(origin) !== -1 || !origin) {
-            callback(null, true);
-        } else {
+  origin: function (origin, callback) {
+    // Permite peticiones sin origin (como Postman) y de la whitelist
+    if (!origin || whiteList.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    // Permite cualquier subdominio de vercel.app para los despliegues de prueba
+    if (/\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
             callback(new Error('No permitido por CORS'));
-        }
+        
     }
 };
 app.use(cors(corsOptions));
