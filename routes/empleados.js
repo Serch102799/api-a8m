@@ -112,7 +112,7 @@ router.get('/usuario/:nombreUsuario', async (req, res) => {
  *       201:
  *         description: Empleado creado exitosamente
  */
-router.post('/', /* checkRole(['Admin']),  */[
+router.post('/', /* Sin verifyToken ni checkRole temporalmente */ [
   body('Nombre').notEmpty().withMessage('Nombre es requerido'),
   body('Nombre_Usuario').notEmpty().withMessage('Nombre_Usuario es requerido'),
   body('Contrasena_Hash').notEmpty().withMessage('Contrasena es requerida'),
@@ -128,7 +128,6 @@ router.post('/', /* checkRole(['Admin']),  */[
     Departamento,
     Nombre_Usuario,
     Contrasena_Hash,
-    Estado_Cuenta,
     rol
   } = req.body;
 
@@ -137,15 +136,14 @@ router.post('/', /* checkRole(['Admin']),  */[
     const result = await pool.query(
       `INSERT INTO empleado 
        (nombre, puesto, departamento, nombre_usuario, contrasena_hash, estado_cuenta, rol)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id_empleado, nombre, puesto, departamento, nombre_usuario, estado_cuenta, rol`,
+       VALUES ($1, $2, $3, $4, $5, 'Activo', $6)
+       RETURNING id_empleado, nombre, puesto, rol`,
       [
         Nombre,
         Puesto,
         Departamento,
         Nombre_Usuario,
         hashedPassword,
-        Estado_Cuenta || 'Activo',
         rol || 'Almacenista'
       ]
     );
@@ -154,6 +152,7 @@ router.post('/', /* checkRole(['Admin']),  */[
     if (error.code === '23505') {
       return res.status(400).json({ message: 'Nombre de usuario ya está en uso' });
     }
+    console.error("Error al crear empleado:", error);
     res.status(500).json({ message: 'Error al crear el empleado' });
   }
 });
