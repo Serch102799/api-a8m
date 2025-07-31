@@ -15,7 +15,7 @@ const router = express.Router();
  */
 
 // 🔒 Obtener todos los empleados activos
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id_empleado, nombre, puesto, departamento, nombre_usuario, estado_cuenta, rol 
