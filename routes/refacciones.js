@@ -224,63 +224,136 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
 
 /**
  * @swagger
- * /api/refacciones/nombre/{nombre}:
+ * /api/refacciones/{id}:
  *   put:
- *     summary: Editar una refacción por nombre 
+ *     summary: Editar una refacción existente por su ID
  *     tags: [Refacciones]
+ *     security:
+ *       - bearerAuth: []   # Token JWT requerido
  *     parameters:
  *       - in: path
- *         name: nombre
+ *         name: id
  *         required: true
+ *         description: ID numérico de la refacción a editar
  *         schema:
- *           type: string
+ *           type: integer
+ *           example: 12
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - Nombre
  *             properties:
- *               Stock_Actual:
- *                 type: integer
+ *               Nombre:
+ *                 type: string
+ *                 example: "Filtro de aceite premium"
+ *               Numero_Parte:
+ *                 type: string
+ *                 example: "FA-12345"
+ *               Categoria:
+ *                 type: string
+ *                 example: "Motor"
+ *               Marca:
+ *                 type: string
+ *                 example: "Bosch"
+ *               Descripcion:
+ *                 type: string
+ *                 example: "Compatible con motores diésel serie XZ"
+ *               Unidad_Medida:
+ *                 type: string
+ *                 example: "Pieza"
+ *               Ubicacion_Almacen:
+ *                 type: string
+ *                 example: "Pasillo 3 - Estante B"
  *               Stock_Minimo:
  *                 type: integer
+ *                 example: 5
  *               Stock_Maximo:
  *                 type: integer
+ *                 example: 50
  *               Precio_Costo:
  *                 type: number
+ *                 format: float
+ *                 example: 125.50
  *     responses:
  *       200:
- *         description: Refacción actualizada
+ *         description: Refacción actualizada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Refaccion'
+ *       400:
+ *         description: Datos inválidos o faltantes
+ *       401:
+ *         description: Token inválido o no proporcionado
+ *       403:
+ *         description: No tiene permisos para esta operación
+ *       404:
+ *         description: Refacción no encontrada
+ *       500:
+ *         description: Error en el servidor
  */
-router.put('/nombre/:nombre', async (req, res) => {
-  const { nombre } = req.params;
+
+router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+  const { id } = req.params;
+  
+  // 1. Se elimina 'Precio_Costo' de las variables a recibir
   const {
-    Stock_Actual,
+    Nombre,
+    Numero_Parte,
+    Categoria,
+    Marca,
+    Descripcion,
+    Unidad_Medida,
+    Ubicacion_Almacen,
     Stock_Minimo,
-    Stock_Maximo,
-    Precio_Costo,
+    Stock_Maximo
   } = req.body;
+
+  if (!Nombre) {
+    return res.status(400).json({ message: 'El campo Nombre es requerido.' });
+  }
 
   try {
     const result = await pool.query(
-      `UPDATE Refaccion SET 
-        Stock_Actual = COALESCE($1, Stock_Actual),
-        Stock_Minimo = COALESCE($2, Stock_Minimo),
-        Stock_Maximo = COALESCE($3, Stock_Maximo),
-        Precio_Costo = COALESCE($4, Precio_Costo)
-       WHERE LOWER(Nombre) = LOWER($5)
+      `UPDATE refaccion 
+       SET 
+         nombre = $1, 
+         numero_parte = $2, 
+         categoria = $3, 
+         marca = $4, 
+         descripcion = $5, 
+         unidad_medida = $6, 
+         ubicacion_almacen = $7, 
+         stock_minimo = $8, 
+         stock_maximo = $9 -- 2. Se elimina la línea de 'precio_costo'
+       WHERE id_refaccion = $10 -- 3. El placeholder para el ID ahora es $10
        RETURNING *`,
-      [Stock_Actual, Stock_Minimo, Stock_Maximo, Precio_Costo, nombre]
+      [ // 4. Se elimina 'Precio_Costo' del arreglo de parámetros
+        Nombre,
+        Numero_Parte,
+        Categoria,
+        Marca,
+        Descripcion,
+        Unidad_Medida,
+        Ubicacion_Almacen,
+        Stock_Minimo,
+        Stock_Maximo,
+        id
+      ]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Refacción no encontrada' });
+      return res.status(404).json({ message: 'Refacción no encontrada.' });
     }
 
-    res.json({ message: 'Refacción actualizada', refaccion: result.rows[0] });
+    res.status(200).json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ message: 'Error al actualizar refacción' });
+    console.error('Error al actualizar la refacción:', error);
+    res.status(500).json({ message: 'Error al actualizar la refacción' });
   }
 });
 
