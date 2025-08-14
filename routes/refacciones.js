@@ -129,6 +129,8 @@ router.get('/marca/:marca', async (req, res) => {
  *   post:
  *     summary: Crear una nueva refacción
  *     tags: [Refacciones]
+ *     security:
+ *       - bearerAuth: []   # Token JWT requerido
  *     requestBody:
  *       required: true
  *       content:
@@ -137,37 +139,56 @@ router.get('/marca/:marca', async (req, res) => {
  *             type: object
  *             required:
  *               - Nombre
+ *               - Unidad_Medida
  *             properties:
  *               Nombre:
  *                 type: string
+ *                 example: "Filtro de aceite"
  *               Numero_Parte:
  *                 type: string
+ *                 example: "FA-12345"
  *               Categoria:
  *                 type: string
+ *                 example: "Motor"
  *               Marca:
  *                 type: string
+ *                 example: "Bosch"
  *               Unidad_Medida:
  *                 type: string
+ *                 example: "Pieza"
  *               Ubicacion_Almacen:
  *                 type: string
- *               Stock_Actual:
- *                 type: integer
+ *                 example: "Pasillo 3 - Estante B"
  *               Stock_Minimo:
  *                 type: integer
+ *                 example: 5
  *               Stock_Maximo:
  *                 type: integer
- *               Precio_Costo:
- *                 type: number
- *               Fecha_Ultima_Entrada:
- *                 type: string
- *                 format: date
+ *                 example: 50
  *               Proveedor_Principal_ID:
  *                 type: integer
+ *                 example: 2
+ *               Descripcion:
+ *                 type: string
+ *                 description: Notas sobre el uso o aplicación de la refacción. (Campo opcional)
+ *                 example: "Se utiliza en motores diésel serie XZ."
  *     responses:
  *       201:
- *         description: Refacción creada
+ *         description: Refacción creada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Refaccion'
+ *       400:
+ *         description: Datos inválidos o refacción duplicada
+ *       401:
+ *         description: Token inválido o no proporcionado
+ *       403:
+ *         description: No tiene permisos para esta operación
+ *       500:
+ *         description: Error en el servidor
  */
-router.post('/', [verifyToken, checkRole(['Admin'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
  
   const {
     Nombre,
@@ -176,7 +197,8 @@ router.post('/', [verifyToken, checkRole(['Admin'])], async (req, res) => {
     Marca,
     Unidad_Medida,
     Ubicacion_Almacen,
-    Stock_Minimo
+    Stock_Minimo,
+    Descripcion 
   } = req.body;
 
   if (!Nombre || !Unidad_Medida) {
@@ -184,16 +206,15 @@ router.post('/', [verifyToken, checkRole(['Admin'])], async (req, res) => {
   }
 
   try {
-    // ✅ La consulta INSERT ya no incluye stock_actual ni precio_costo
     const result = await pool.query(
-      `INSERT INTO refaccion (nombre, numero_parte, categoria, marca, unidad_medida, ubicacion_almacen, stock_minimo)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) 
+      `INSERT INTO refaccion (nombre, numero_parte, categoria, marca, unidad_medida, ubicacion_almacen, stock_minimo, descripcion)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
        RETURNING *`,
-      [Nombre, Numero_Parte, Categoria, Marca, Unidad_Medida, Ubicacion_Almacen, Stock_Minimo]
+      [Nombre, Numero_Parte, Categoria, Marca, Unidad_Medida, Ubicacion_Almacen, Stock_Minimo, Descripcion]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    if (error.code === '23505') { // Error de valor duplicado
+    if (error.code === '23505') { 
       return res.status(400).json({ message: 'Una refacción con ese nombre o número de parte ya existe.' });
     }
     console.error('Error al crear refacción:', error);
