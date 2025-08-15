@@ -150,9 +150,10 @@ router.get('/:economico', async (req, res) => {
  * /api/autobuses:
  *   post:
  *     summary: Crear un nuevo autobús
+ *     description: Registra un nuevo autobús en el sistema con todos sus datos técnicos y administrativos.
  *     tags: [Autobuses]
  *     security:
- *       - bearerAuth: []   # Token JWT requerido
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -162,45 +163,66 @@ router.get('/:economico', async (req, res) => {
  *             required:
  *               - Economico
  *               - Razon_Social
+ *               - Placa
+ *               - Chasis
  *             properties:
  *               Economico:
  *                 type: string
+ *                 description: Número económico del autobús (identificador interno).
  *                 example: "A8M-120"
  *               Marca:
  *                 type: string
+ *                 description: Marca del fabricante.
  *                 example: "Mercedes-Benz"
  *               Modelo:
  *                 type: string
+ *                 description: Modelo del autobús.
  *                 example: "Tourismo"
  *               Anio:
  *                 type: integer
+ *                 description: Año de fabricación.
  *                 example: 2021
  *               Kilometraje_Actual:
  *                 type: integer
+ *                 description: Kilometraje actual en kilómetros.
  *                 example: 45000
  *               VIN:
  *                 type: string
+ *                 description: Número de Identificación Vehicular.
  *                 example: "1M8PDMPA9KP042788"
  *               Razon_Social:
  *                 type: string
  *                 description: Razón social a la que pertenece el autobús.
  *                 enum: [MARTRESS, A8M, TRESA, GIALJU]
  *                 example: "A8M"
+ *               Chasis:
+ *                 type: string
+ *                 description: Número de chasis del vehículo.
+ *                 example: "CHASIS123456789"
+ *               Motor:
+ *                 type: string
+ *                 description: Número o identificador del motor.
+ *                 example: "MOTOR987654321"
+ *               Tarjeta_Circulacion:
+ *                 type: string
+ *                 description: Folio de la tarjeta de circulación.
+ *                 example: "TC-CDMX-2025-1"
+ *               Placa:
+ *                 type: string
+ *                 description: Placa del vehículo.
+ *                 example: "A-123-BCD"
+ *               Sistema:
+ *                 type: string
+ *                 description: Tipo de sistema de control de emisiones.
+ *                 enum: [UREA, EGR, OTRO]
+ *                 example: "UREA"
  *     responses:
  *       201:
- *         description: Autobús creado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Autobus'
+ *         description: Autobús creado exitosamente.
  *       400:
- *         description: Error de validación o datos duplicados
- *       401:
- *         description: Token inválido o no proporcionado
- *       403:
- *         description: No tiene permisos para esta operación
+ *         description: Error de validación o datos duplicados.
  *       500:
- *         description: Error en el servidor
+ *         description: Error interno al crear el autobús.
  */
 router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (req, res) => {
   const errors = validationResult(req);
@@ -208,27 +230,41 @@ router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (re
     return res.status(400).json({ errores: errors.array() });
   }
 
-  const { Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social } = req.body;
+  const { 
+    Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social,
+    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema 
+  } = req.body;
 
   try {
     const result = await pool.query(
-      `INSERT INTO autobus (economico, marca, modelo, anio, kilometraje_actual, vin, razon_social)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO autobus (
+        economico, marca, modelo, anio, kilometraje_actual, vin, razon_social, 
+        chasis, motor, tarjeta_circulacion, placa, sistema
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social]
+      [
+        Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social,
+        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema
+      ]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === '23505') {
-      const message = error.constraint === 'autobus_vin_key' 
-        ? 'El VIN ya está en uso por otro autobús.' 
-        : 'El número económico ya está en uso.';
-      return res.status(400).json({ message });
+        let message = 'Uno de los identificadores únicos ya está en uso (Económico, VIN, Chasis, Motor, Placa o Tarjeta).';
+        // Opcional: dar un mensaje más específico si se conoce el constraint_name
+        if (error.constraint && error.constraint.includes('economico')) message = 'El número económico ya está en uso.';
+        if (error.constraint && error.constraint.includes('vin')) message = 'El VIN ya está en uso.';
+        if (error.constraint && error.constraint.includes('placa')) message = 'La placa ya está en uso.';
+
+        return res.status(400).json({ message });
     }
     if (error.code === '23503' || error.code === '22P02') { 
-        return res.status(400).json({ message: 'El valor de Razón Social no es válido.' });
+        let message = 'Uno de los valores seleccionados no es válido (Razón Social o Sistema).';
+        return res.status(400).json({ message });
     }
-    res.status(500).json({ message: 'Error al crear el autobús' });
+    console.error("Error al crear el autobús:", error);
+    res.status(500).json({ message: 'Error interno al crear el autobús' });
   }
 });
 
@@ -239,14 +275,13 @@ router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (re
  *     summary: Actualizar un autobús existente por su ID
  *     tags: [Autobuses]
  *     security:
- *       - bearerAuth: []   # Token JWT requerido
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: integer
- *           example: 15
  *         description: ID numérico del autobús a actualizar
  *     requestBody:
  *       required: true
@@ -257,42 +292,42 @@ router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (re
  *             properties:
  *               Marca:
  *                 type: string
- *                 example: "Mercedes-Benz"
  *               Modelo:
  *                 type: string
- *                 example: "Tourismo"
  *               Anio:
  *                 type: integer
- *                 example: 2022
  *               Kilometraje_Actual:
  *                 type: integer
- *                 example: 62000
  *               Razon_Social:
  *                 type: string
  *                 enum: [MARTRESS, A8M, TRESA, GIALJU]
- *                 example: "MARTRESS"
+ *               Chasis:
+ *                 type: string
+ *               Motor:
+ *                 type: string
+ *               Tarjeta_Circulacion:
+ *                 type: string
+ *               Placa:
+ *                 type: string
+ *               Sistema:
+ *                 type: string
+ *                 enum: [UREA, EGR, OTRO]
  *     responses:
  *       200:
  *         description: Autobús actualizado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Autobus'
  *       400:
  *         description: Datos inválidos o faltantes
- *       401:
- *         description: Token inválido o no proporcionado
- *       403:
- *         description: No tiene permisos para esta operación
  *       404:
  *         description: Autobús no encontrado
  *       500:
- *         description: Error en el servidor
+ *         description: Error al actualizar el autobús
  */
-
 router.put('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
   const { id } = req.params; 
-  const { Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social } = req.body; 
+  const { 
+    Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social,
+    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema
+  } = req.body; 
 
   try {
     const result = await pool.query(
@@ -302,10 +337,19 @@ router.put('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
          Modelo = $2, 
          Anio = $3, 
          Kilometraje_Actual = $4,
-         razon_social = $5
-       WHERE ID_Autobus = $6
+         razon_social = $5,
+         chasis = $6,
+         motor = $7,
+         tarjeta_circulacion = $8,
+         placa = $9,
+         sistema = $10
+       WHERE ID_Autobus = $11
        RETURNING *`,
-      [Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social, id] 
+      [
+        Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social,
+        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema,
+        id 
+      ]
     );
 
     if (result.rows.length === 0) {
@@ -314,6 +358,12 @@ router.put('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
     res.json(result.rows[0]);
   } catch (error) {
     console.error("Error al actualizar autobús:", error);
+    if (error.code === '23505') {
+        return res.status(400).json({ message: 'Uno de los identificadores únicos (VIN, Chasis, Placa, etc.) ya está en uso.' });
+    }
+    if (error.code === '23503' || error.code === '22P02') { 
+        return res.status(400).json({ message: 'Uno de los valores seleccionados (Razón Social o Sistema) no es válido.' });
+    }
     res.status(500).json({ message: 'Error al actualizar el autobús' });
   }
 });
