@@ -65,53 +65,53 @@ const validateAutobus = [
  *       500:
  *         description: Error al obtener autobuses
  */
-// En tu archivo de rutas para autobuses
-
 router.get('/', async (req, res) => {
   const { 
     page = 1, 
     limit = 10, 
-    search = '' 
+    search = '',
+    // CAMBIO: Se aceptan sortBy y sortOrder de la consulta
+    sortBy = 'economico', // Columna por defecto para ordenar
+    sortOrder = 'asc'  // Dirección por defecto
   } = req.query;
   
   try {
+    // CAMBIO: Lista blanca de columnas permitidas para ordenar. ¡Esto es por seguridad!
+    const allowedSortBy = ['economico', 'marca', 'modelo', 'anio', 'kilometraje_actual', 'placa', 'razon_social'];
+    const sortColumn = allowedSortBy.includes(sortBy) ? sortBy : 'economico';
+    const sortDirection = sortOrder.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
     const params = [];
     let whereClause = '';
 
-    // Se construye la cláusula WHERE solo si hay un término de búsqueda
     if (search.trim() !== '') {
       const searchTerm = `%${search.trim()}%`;
       params.push(searchTerm);
-      // Se agrupan las condiciones con OR
       whereClause = `
         WHERE (
-          economico ILIKE $1 OR 
-          marca ILIKE $1 OR 
-          vin ILIKE $1 OR 
-          placa ILIKE $1 OR
-          razon_social::text ILIKE $1 OR
-          chasis ILIKE $1
+          economico ILIKE $1 OR marca ILIKE $1 OR vin ILIKE $1 OR 
+          placa ILIKE $1 OR razon_social::text ILIKE $1 OR chasis ILIKE $1
         )
       `;
     }
 
-    // --- Primera consulta: Obtener el CONTEO TOTAL ---
+    // --- Consulta de CONTEO (sin cambios) ---
     const totalQuery = `SELECT COUNT(*) FROM autobus ${whereClause}`;
     const totalResult = await pool.query(totalQuery, params);
     const totalItems = parseInt(totalResult.rows[0].count, 10);
 
-    // --- Segunda consulta: Obtener los DATOS de la página actual ---
+    // --- Consulta de DATOS (con ordenamiento dinámico) ---
     const offset = (page - 1) * limit;
-    
-    // Los parámetros para LIMIT y OFFSET siempre se añaden al final
     const dataParams = [...params, limit, offset];
+    
+    // CAMBIO: Se construye y añade la cláusula ORDER BY a la consulta
+    const orderByClause = `ORDER BY ${sortColumn} ${sortDirection}`;
     const limitOffsetPlaceholders = `LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 
-    const dataQuery = `SELECT * FROM autobus ${whereClause} ORDER BY economico ASC ${limitOffsetPlaceholders}`;
+    const dataQuery = `SELECT * FROM autobus ${whereClause} ${orderByClause} ${limitOffsetPlaceholders}`;
     
     const dataResult = await pool.query(dataQuery, dataParams);
 
-    // Se devuelve el objeto estructurado que el frontend espera
     res.json({
       total: totalItems,
       data: dataResult.rows
