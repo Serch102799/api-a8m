@@ -65,46 +65,63 @@ const validateAutobus = [
  *       500:
  *         description: Error al obtener autobuses
  */
+// En tu archivo de rutas para autobuses
+
 router.get('/', async (req, res) => {
-  const { economico, marca, modelo, anio, vin, razon_social } = req.query;
+  const { 
+    page = 1, 
+    limit = 10, 
+    search = '' 
+  } = req.query;
+  
   try {
-    let baseQuery = 'SELECT * FROM autobus WHERE 1=1';
     const params = [];
-    let paramCount = 1;
+    let whereClause = '';
 
-    if (economico) {
-      baseQuery += ` AND economico ILIKE $${paramCount++}`;
-      params.push(`%${economico}%`);
-    }
-    if (marca) {
-      baseQuery += ` AND marca ILIKE $${paramCount++}`;
-      params.push(`%${marca}%`);
-    }
-    if (modelo) {
-      baseQuery += ` AND modelo ILIKE $${paramCount++}`;
-      params.push(`%${modelo}%`);
-    }
-    if (anio) {
-      baseQuery += ` AND anio = $${paramCount++}`;
-      params.push(anio);
-    }
-    if (vin) {
-      baseQuery += ` AND vin ILIKE $${paramCount++}`;
-      params.push(`%${vin}%`);
-    }
-    if (razon_social) {
-      baseQuery += ` AND razon_social = $${paramCount++}`;
-      params.push(razon_social);
+    // Se construye la cláusula WHERE solo si hay un término de búsqueda
+    if (search.trim() !== '') {
+      const searchTerm = `%${search.trim()}%`;
+      params.push(searchTerm);
+      // Se agrupan las condiciones con OR
+      whereClause = `
+        WHERE (
+          economico ILIKE $1 OR 
+          marca ILIKE $1 OR 
+          vin ILIKE $1 OR 
+          placa ILIKE $1 OR
+          razon_social::text ILIKE $1 OR
+          chasis ILIKE $1
+        )
+      `;
     }
 
-    const result = await pool.query(baseQuery, params);
-    res.json(result.rows);
+    // --- Primera consulta: Obtener el CONTEO TOTAL ---
+    const totalQuery = `SELECT COUNT(*) FROM autobus ${whereClause}`;
+    const totalResult = await pool.query(totalQuery, params);
+    const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+    // --- Segunda consulta: Obtener los DATOS de la página actual ---
+    const offset = (page - 1) * limit;
+    
+    // Los parámetros para LIMIT y OFFSET siempre se añaden al final
+    const dataParams = [...params, limit, offset];
+    const limitOffsetPlaceholders = `LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+
+    const dataQuery = `SELECT * FROM autobus ${whereClause} ORDER BY economico ASC ${limitOffsetPlaceholders}`;
+    
+    const dataResult = await pool.query(dataQuery, dataParams);
+
+    // Se devuelve el objeto estructurado que el frontend espera
+    res.json({
+      total: totalItems,
+      data: dataResult.rows
+    });
+
   } catch (error) {
     console.error("Error al obtener autobuses:", error);
     res.status(500).json({ message: 'Error al obtener autobuses' });
   }
 });
-
 
 /**
  * @swagger
@@ -415,7 +432,7 @@ router.delete('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
   try {
     const result = await pool.query(
       'DELETE FROM Autobus WHERE ID_Autobus = $1 RETURNING *',
-      [id] // CAMBIO: Se pasa el id como parámetro
+      [id] 
     );
 
     if (result.rows.length === 0) {
