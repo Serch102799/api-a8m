@@ -112,7 +112,7 @@ router.get('/:idAutobus', async (req, res) => {
     const costoTotalPromise = pool.query(
       `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
           -- Costos de REFACCIONES (desde el lote)
-          SELECT SUM(ds.cantidad_despachada * l.costo_unitario_compra) as costo_total
+          SELECT SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
           FROM detalle_salida ds
           JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida

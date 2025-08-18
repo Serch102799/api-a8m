@@ -89,7 +89,7 @@ router.get('/stats', async (req, res) => {
       ) as stock_bajo;
     `);
 
-    const valorInventarioPromise = pool.query('SELECT SUM(cantidad_disponible * costo_unitario_compra) as valor_total FROM lote_refaccion');
+    const valorInventarioPromise = pool.query('SELECT SUM(cantidad_disponible * costo_unitario_final) AS valor_total FROM lote_refaccion');
 
     const topStockPromise = pool.query(`
       SELECT r.nombre, SUM(l.cantidad_disponible) as stock_actual
@@ -115,7 +115,7 @@ router.get('/stats', async (req, res) => {
     const ultimasSalidasPromise = pool.query(`SELECT ds.cantidad_despachada, r.nombre as nombre_refaccion, sa.fecha_salida FROM detalle_salida ds JOIN refaccion r ON ds.id_refaccion = r.id_refaccion JOIN salida_almacen sa ON ds.id_salida = sa.id_salida ORDER BY sa.fecha_salida DESC LIMIT 5`);
 
     const topCostoAutobusesPromise = pool.query(`
-      SELECT a.economico, SUM(ds.cantidad_despachada * l.costo_unitario_compra) as costo_total
+      SELECT a.economico, SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
       FROM detalle_salida ds
       JOIN lote_refaccion l ON ds.id_lote = l.id_lote
       JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
@@ -125,7 +125,6 @@ router.get('/stats', async (req, res) => {
       LIMIT 5
     `);
 
-    // ✅ CORRECCIÓN: Se asegura de que todas sean variables de promesa (terminadas en 'Promise')
     const [
       totalRefaccionesRes, stockBajoRes, valorInventarioRes, topStockRes,
       lowStockItemsRes, ultimasEntradasRes, ultimasSalidasRes, topCostoAutobusesRes
