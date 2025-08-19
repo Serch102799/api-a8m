@@ -122,6 +122,60 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener autobuses' });
   }
 });
+/**
+ * @swagger
+ * /api/autobuses/lista-simple:
+ *   get:
+ *     summary: Obtener lista simple de autobuses
+ *     description: Retorna una lista simplificada de autobuses con su ID, número económico y kilometraje actual.
+ *     tags: [Autobuses]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de autobuses obtenida exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id_autobus:
+ *                     type: integer
+ *                     description: ID único del autobús
+ *                     example: 5
+ *                   economico:
+ *                     type: string
+ *                     description: Número económico del autobús
+ *                     example: "A-102"
+ *                   kilometraje_actual:
+ *                     type: integer
+ *                     description: Kilometraje actual registrado
+ *                     example: 152000
+ *       500:
+ *         description: Error al obtener la lista de autobuses
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Error al obtener la lista de autobuses
+ */
+router.get('/lista-simple', verifyToken, async (req, res) => {
+  try {
+    // Esta consulta es más eficiente porque solo trae los campos necesarios
+    const result = await pool.query(
+      'SELECT id_autobus, economico, kilometraje_actual FROM autobus ORDER BY economico ASC'
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error al obtener la lista simple de autobuses:', error);
+    res.status(500).json({ message: 'Error al obtener la lista de autobuses' });
+  }
+});
 
 /**
  * @swagger
@@ -508,6 +562,7 @@ router.get('/:idEntrada', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener los detalles de la entrada' });
   }
 });
+
 
 module.exports = router;
 
