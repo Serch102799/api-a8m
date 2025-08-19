@@ -12,10 +12,9 @@ const checkRole = require('../middleware/checkRole');
 
 /**
  * @swagger
- * /api/entrada-insumo:
+ * /api/entradas-insumo:
  *   get:
  *     summary: Obtener historial de entradas de insumos
- *     description: Lista todas las entradas de insumo, incluyendo datos del proveedor y empleado que registró la entrada.
  *     tags: [EntradaInsumos]
  *     security:
  *       - bearerAuth: []
@@ -31,31 +30,33 @@ const checkRole = require('../middleware/checkRole');
  *                 properties:
  *                   id_entrada_insumo:
  *                     type: integer
- *                     example: 42
- *                   id_proveedor:
- *                     type: integer
- *                     example: 3
- *                   id_empleado:
- *                     type: integer
- *                     example: 5
+ *                     example: 15
+ *                   fecha_entrada:
+ *                     type: string
+ *                     format: date-time
+ *                     example: "2025-08-17T10:30:00.000Z"
  *                   numero_factura:
  *                     type: string
  *                     example: "FAC-2025-001"
  *                   observaciones:
  *                     type: string
- *                     example: "Entrega parcial, faltan 2 cajas"
- *                   fecha_entrada:
- *                     type: string
- *                     format: date-time
- *                     example: "2025-07-20T14:35:00Z"
+ *                     example: "Compra mensual de insumos de oficina"
  *                   nombre_proveedor:
  *                     type: string
- *                     example: "Proveedor XYZ"
+ *                     example: "Papelería Central"
  *                   nombre_empleado:
  *                     type: string
- *                     example: "María López"
+ *                     example: "María González"
  *       500:
  *         description: Error interno al obtener entradas
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Error al obtener entradas de insumos
  */
 router.get('/', verifyToken, async (req, res) => {
     try {
@@ -68,18 +69,19 @@ router.get('/', verifyToken, async (req, res) => {
         `);
         res.json(result.rows);
     } catch (error) {
+        console.error('Error al obtener entradas de insumos:', error);
         res.status(500).json({ message: 'Error al obtener entradas de insumos' });
     }
 });
 /**
  * @swagger
- * /api/entrada-insumo:
+ * /api/entradas-insumo:
  *   post:
  *     summary: Registrar una nueva entrada de insumos (maestro y detalles)
  *     description: >
- *       Crea un registro maestro de entrada de insumos junto con sus detalles.
- *       Para cada detalle, calcula el costo unitario considerando si es neto o unitario,
- *       aplica IVA en caso necesario y actualiza el stock y costo promedio ponderado del insumo.
+ *       Crea un registro maestro de entrada de insumos y sus detalles.  
+ *       Para cada detalle, calcula el costo unitario final (con/sin IVA)  
+ *       y actualiza el stock y el costo promedio ponderado del insumo.
  *     tags: [EntradaInsumos]
  *     security:
  *       - bearerAuth: []
@@ -93,9 +95,6 @@ router.get('/', verifyToken, async (req, res) => {
  *             properties:
  *               maestro:
  *                 type: object
- *                 required:
- *                   - id_proveedor
- *                   - id_empleado
  *                 properties:
  *                   id_proveedor:
  *                     type: integer
@@ -105,41 +104,33 @@ router.get('/', verifyToken, async (req, res) => {
  *                     example: 7
  *                   numero_factura:
  *                     type: string
- *                     example: "FAC-2025-001"
+ *                     example: "FAC-2025-002"
  *                   observaciones:
  *                     type: string
  *                     example: "Compra de insumos de limpieza"
  *               detalles:
  *                 type: array
  *                 minItems: 1
- *                 description: Lista de insumos que forman parte de la entrada
  *                 items:
  *                   type: object
- *                   required:
- *                     - id_insumo
- *                     - cantidad_recibida
- *                     - costo_ingresado
- *                     - tipo_costo
- *                     - aplica_iva
+ *                   required: [id_insumo, cantidad_recibida, costo_ingresado, tipo_costo, aplica_iva]
  *                   properties:
  *                     id_insumo:
  *                       type: integer
  *                       example: 12
  *                     cantidad_recibida:
  *                       type: number
- *                       example: 40
+ *                       example: 100
  *                     costo_ingresado:
  *                       type: number
- *                       example: 1000
- *                       description: Valor del costo ingresado (neto o unitario según tipo_costo)
+ *                       example: 2500
  *                     tipo_costo:
  *                       type: string
  *                       enum: [unitario, neto]
- *                       example: "unitario"
+ *                       example: neto
  *                     aplica_iva:
  *                       type: boolean
  *                       example: true
- *                       description: Indica si aplica IVA del 16%
  *     responses:
  *       201:
  *         description: Entrada de insumos registrada exitosamente
@@ -150,12 +141,12 @@ router.get('/', verifyToken, async (req, res) => {
  *               properties:
  *                 id_entrada_insumo:
  *                   type: integer
- *                   example: 101
+ *                   example: 16
  *                 message:
  *                   type: string
  *                   example: Entrada de insumos registrada exitosamente
  *       400:
- *         description: Datos inválidos o petición mal formada
+ *         description: Datos inválidos en la petición
  *         content:
  *           application/json:
  *             schema:
@@ -165,17 +156,17 @@ router.get('/', verifyToken, async (req, res) => {
  *                   type: string
  *                   example: La petición debe incluir un objeto "maestro" y un arreglo "detalles" con al menos un ítem.
  *       500:
- *         description: Error interno en la transacción
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Error al procesar la entrada: Cada detalle debe incluir id_insumo, cantidad y costo válidos.
- */
+  description: Error interno al registrar entrada de insumos
+  content:
+    application/json:
+      schema:
+        type: object
+        properties:
+          message:
+            type: string
+            example: "Error al procesar la entrada: El insumo con ID 99 no fue encontrado."
 
+ */
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
     const { maestro, detalles } = req.body;
     
@@ -199,37 +190,46 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
             const { id_insumo, cantidad_recibida, costo_ingresado, tipo_costo, aplica_iva } = detalle;
             const cantidadNueva = parseFloat(cantidad_recibida);
 
-            if (!id_insumo || !cantidadNueva || cantidadNueva <= 0 || !costo_ingresado || costo_ingresado <= 0 || !tipo_costo) {
+            if (!id_insumo || !cantidadNueva || cantidadNueva <= 0 || !costo_ingresado || costo_ingresado < 0 || !tipo_costo) {
                 throw new Error('Cada detalle debe incluir id_insumo, cantidad y costo válidos.');
             }
 
-            // --- Lógica de Cálculo de Costo (Esta parte ya estaba bien) ---
+            // --- Lógica de Cálculo de Costo ---
             let costoUnitarioSubtotal = 0;
             if (tipo_costo === 'unitario') {
                 costoUnitarioSubtotal = parseFloat(costo_ingresado);
             } else if (tipo_costo === 'neto') {
-                costoUnitarioSubtotal = parseFloat(costo_ingresado) / cantidadNueva;
+                // Evita división por cero
+                costoUnitarioSubtotal = cantidadNueva > 0 ? parseFloat(costo_ingresado) / cantidadNueva : 0;
+            } else {
+                throw new Error(`Tipo de costo '${tipo_costo}' no es válido.`);
             }
 
             const montoIvaUnitario = aplica_iva ? costoUnitarioSubtotal * 0.16 : 0;
             const costoUnitarioFinal = costoUnitarioSubtotal + montoIvaUnitario;
-            const costoTotalCompraFinal = costoUnitarioFinal * cantidadNueva;
-
-            // --- Actualización de Costo Promedio y Stock (Esta parte ya estaba bien) ---
+            
+            // --- Actualización de Costo Promedio Ponderado y Stock ---
             const insumoActualResult = await client.query('SELECT stock_actual, costo_unitario_promedio FROM insumo WHERE id_insumo = $1 FOR UPDATE', [id_insumo]);
-            // ... (resto de la lógica de cálculo de costo promedio)
+
+            if (insumoActualResult.rows.length === 0) {
+                throw new Error(`El insumo con ID ${id_insumo} no fue encontrado.`);
+            }
 
             const stockViejo = parseFloat(insumoActualResult.rows[0].stock_actual);
             const costoViejo = parseFloat(insumoActualResult.rows[0].costo_unitario_promedio);
+            
             const valorTotalViejo = stockViejo * costoViejo;
+            const valorTotalNuevo = costoUnitarioFinal * cantidadNueva;
             const nuevoStockTotal = stockViejo + cantidadNueva;
-            const nuevoCostoPromedio = nuevoStockTotal > 0 ? (valorTotalViejo + costoTotalCompraFinal) / nuevoStockTotal : 0;
+            
+            const nuevoCostoPromedio = nuevoStockTotal > 0 ? (valorTotalViejo + valorTotalNuevo) / nuevoStockTotal : 0;
 
             await client.query(
                 `UPDATE insumo SET stock_actual = $1, costo_unitario_promedio = $2 WHERE id_insumo = $3`,
                 [nuevoStockTotal, nuevoCostoPromedio.toFixed(4), id_insumo]
             );
 
+            // --- Inserción en Tabla de Detalle con Costos Desglosados ---
             await client.query(
                 `INSERT INTO detalle_entrada_insumo (id_entrada_insumo, id_insumo, cantidad_recibida, costo_unitario_subtotal, monto_iva_unitario, costo_unitario_final)
                  VALUES ($1, $2, $3, $4, $5, $6)`,
