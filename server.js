@@ -28,18 +28,17 @@ const whiteList = [
     'https://sge-10.vercel.app'     
 ];
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Permite peticiones sin origin (como Postman) y de la whitelist
-    if (!origin || whiteList.indexOf(origin) !== -1) {
-      return callback(null, true);
-    }
-    // Permite cualquier subdominio de vercel.app para los despliegues de prueba
-    if (/\.vercel\.app$/.test(origin)) {
-      return callback(null, true);
-    }
+    origin: function (origin, callback) {
+        // Tu lógica de whitelist está bien, la podemos simplificar un poco
+        if (!origin || whiteList.includes(origin) || /\.vercel\.app$/.test(origin)) {
+            callback(null, true);
+        } else {
             callback(new Error('No permitido por CORS'));
-        
-    }
+        }
+    },
+    // CAMBIO: Se añaden estas propiedades para permitir peticiones complejas
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+    allowedHeaders: "Origin, X-Requested-With, Content-Type, Accept, Authorization"
 };
 app.use(cors(corsOptions));
 
