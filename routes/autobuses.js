@@ -200,7 +200,6 @@ router.get('/buscar', verifyToken, async (req, res) => {
   }
 });
 
-
 /**
  * @swagger
  * /api/autobuses/{economico}:
@@ -327,20 +326,20 @@ router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (re
 
   const { 
     Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social,
-    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema 
+    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema,HP, Carroceria, Sistema_Electrico, Medida_Llanta 
   } = req.body;
 
   try {
     const result = await pool.query(
       `INSERT INTO autobus (
         economico, marca, modelo, anio, kilometraje_actual, vin, razon_social, 
-        chasis, motor, tarjeta_circulacion, placa, sistema
+        chasis, motor, tarjeta_circulacion, placa, sistema,HP, Carroceria, Sistema_Electrico, Medida_Llanta
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         Economico, Marca, Modelo, Anio, Kilometraje_Actual, VIN, Razon_Social,
-        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema
+        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema, HP, Carroceria, Sistema_Electrico, Medida_Llanta
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -421,28 +420,22 @@ router.put('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
   const { id } = req.params; 
   const { 
     Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social,
-    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema
+    Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema, HP, Carroceria, Sistema_Electrico, Medida_Llanta
   } = req.body; 
 
   try {
     const result = await pool.query(
       `UPDATE Autobus 
        SET 
-         Marca = $1, 
-         Modelo = $2, 
-         Anio = $3, 
-         Kilometraje_Actual = $4,
-         razon_social = $5,
-         chasis = $6,
-         motor = $7,
-         tarjeta_circulacion = $8,
-         placa = $9,
-         sistema = $10
-       WHERE ID_Autobus = $11
+          Marca = $1, Modelo = $2, Anio = $3, Kilometraje_Actual = $4,
+         razon_social = $5, chasis = $6, motor = $7, tarjeta_circulacion = $8,
+         placa = $9, sistema = $10, hp = $11, carroceria = $12,
+         sistema_electrico = $13, medida_llanta = $14
+       WHERE ID_Autobus = $15
        RETURNING *`,
       [
         Marca, Modelo, Anio, Kilometraje_Actual, Razon_Social,
-        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema,
+        Chasis, Motor, Tarjeta_Circulacion, Placa, Sistema, HP, Carroceria, Sistema_Electrico, Medida_Llanta,
         id 
       ]
     );
