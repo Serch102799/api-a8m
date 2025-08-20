@@ -220,6 +220,28 @@ router.delete('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
         res.status(500).json({ message: 'Error al eliminar insumo. Puede que esté en uso en algún registro.' });
     }
 });
+router.get('/buscar', verifyToken, async (req, res) => {
+  const { term } = req.query;
 
+  if (!term || term.length < 2) {
+    return res.json([]);
+  }
+
+  try {
+    const searchTerm = `%${term}%`;
+    const result = await pool.query(
+      `SELECT id_insumo, nombre, marca, tipo, stock_actual, unidad_medida 
+       FROM insumo 
+       WHERE nombre ILIKE $1 OR marca ILIKE $1 OR tipo ILIKE $1
+       ORDER BY nombre ASC
+       LIMIT 10`,
+      [searchTerm]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error en búsqueda de insumos:', error);
+    res.status(500).json({ message: 'Error al buscar insumos' });
+  }
+});
 
 module.exports = router;

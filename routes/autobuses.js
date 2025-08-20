@@ -176,6 +176,30 @@ router.get('/lista-simple', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al obtener la lista de autobuses' });
   }
 });
+router.get('/buscar', verifyToken, async (req, res) => {
+  const { term } = req.query;
+
+  if (!term || term.length < 1) {
+    return res.json([]);
+  }
+
+  try {
+    const searchTerm = `%${term}%`;
+    const result = await pool.query(
+      `SELECT id_autobus, economico, kilometraje_actual 
+       FROM autobus 
+       WHERE economico ILIKE $1 OR marca ILIKE $1 OR placa ILIKE $1 OR vin ILIKE $1
+       ORDER BY economico ASC
+       LIMIT 10`, 
+      [searchTerm]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error en búsqueda de autobuses:', error);
+    res.status(500).json({ message: 'Error al buscar autobuses' });
+  }
+});
+
 
 /**
  * @swagger

@@ -391,5 +391,110 @@ router.delete('/nombre/:nombre', async (req, res) => {
     res.status(500).json({ message: 'Error al eliminar refacción' });
   }
 });
+/**
+ * @swagger
+ * /api/refacciones/buscar:
+ *   get:
+ *     summary: Buscar refacciones para un autocomplete
+ *     description: Permite buscar refacciones por nombre, marca o número de parte. Se requiere al menos 2 caracteres.
+ *     tags: [Refacciones]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: term
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Término de búsqueda para nombre, marca o número de parte.
+ *     responses:
+ *       200:
+ *         description: Lista de refacciones que coinciden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id_refaccion:
+ *                     type: integer
+ *                     description: ID único de la refacción
+ *                     example: 12
+ *                   nombre:
+ *                     type: string
+ *                     description: Nombre de la refacción
+ *                     example: "Filtro de aceite"
+ *                   marca:
+ *                     type: string
+ *                     description: Marca de la refacción
+ *                     example: "Bosch"
+ *                   numero_parte:
+ *                     type: string
+ *                     description: Número de parte de la refacción
+ *                     example: "BOS-12345"
+ *                   stock_actual:
+ *                     type: integer
+ *                     description: Cantidad disponible en inventario
+ *                     example: 25
+ *       400:
+ *         description: Parámetro de búsqueda inválido (menos de 2 caracteres)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               example: []
+ *       500:
+ *         description: Error al buscar refacciones
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Error al buscar refacciones
+ */
+
+router.get('/buscar', verifyToken, async (req, res) => {
+  const { term } = req.query;
+
+  if (!term || term.length < 2) {
+    return res.json([]);
+  }
+
+  try {
+    const searchTerm = `%${term}%`;
+    // CAMBIO: La consulta ahora calcula el stock_actual
+    const result = await pool.query(
+      `
+      SELECT 
+          r.id_refaccion, 
+          r.nombre, 
+          r.marca, 
+          r.numero_parte,
+          COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
+      FROM 
+          refaccion r
+      LEFT JOIN 
+          lote_refaccion l ON r.id_refaccion = l.id_refaccion
+      WHERE 
+          (r.nombre ILIKE $1 OR r.marca ILIKE $1 OR r.numero_parte ILIKE $1)
+          AND l.cantidad_disponible > 0 -- Opcional: solo mostrar refacciones con stock
+      GROUP BY
+          r.id_refaccion, r.nombre, r.marca, r.numero_parte
+      ORDER BY 
+          r.nombre ASC
+      LIMIT 10;
+      `,
+      [searchTerm]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error en búsqueda de refacciones:', error);
+    res.status(500).json({ message: 'Error al buscar refacciones' });
+  }
+});
+
 
 module.exports = router;
