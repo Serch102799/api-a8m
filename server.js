@@ -29,14 +29,12 @@ const whiteList = [
 ];
 const corsOptions = {
     origin: function (origin, callback) {
-        // Tu lógica de whitelist está bien, la podemos simplificar un poco
         if (!origin || whiteList.includes(origin) || /\.vercel\.app$/.test(origin)) {
             callback(null, true);
         } else {
             callback(new Error('No permitido por CORS'));
         }
     },
-    // CAMBIO: Se añaden estas propiedades para permitir peticiones complejas
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     allowedHeaders: "Origin, X-Requested-With, Content-Type, Accept, Authorization"
 };
