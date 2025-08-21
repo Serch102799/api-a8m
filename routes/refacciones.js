@@ -469,7 +469,8 @@ router.get('/buscar', verifyToken, async (req, res) => {
       `
       SELECT 
           r.id_refaccion, 
-          r.nombre, 
+          -- CAMBIO: Se concatenan el nombre y el número de parte en una sola columna 'nombre'
+          (r.nombre || ' (' || COALESCE(r.numero_parte, 'S/N') || ')') AS nombre, 
           r.marca, 
           r.numero_parte,
           COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
@@ -481,9 +482,8 @@ router.get('/buscar', verifyToken, async (req, res) => {
           (r.nombre ILIKE $1 OR r.marca ILIKE $1 OR r.numero_parte ILIKE $1)
       GROUP BY
           r.id_refaccion, r.nombre, r.marca, r.numero_parte
-      -- CAMBIO: Se usa HAVING para filtrar después de la agregación.
-      -- Esto asegura que solo se muestren refacciones con stock total > 0.
-      
+      HAVING
+          COALESCE(SUM(l.cantidad_disponible), 0) > 0
       ORDER BY 
           r.nombre ASC
       LIMIT 10;

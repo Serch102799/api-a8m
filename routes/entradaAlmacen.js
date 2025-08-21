@@ -62,15 +62,15 @@ router.get('/', async (req, res) => {
  *         description: Entrada creada
  */
 router.post('/', async (req, res) => {
-  const { ID_Proveedor, Numero_Factura_Proveedor, Observaciones, Recibido_Por_ID } = req.body;
+  const { ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID } = req.body;
 
   try {
     const result = await pool.query(
       `INSERT INTO Entrada_Almacen 
-        (ID_Proveedor, Numero_Factura_Proveedor, Observaciones, Recibido_Por_ID) 
-       VALUES ($1, $2, $3, $4) 
+        (ID_Proveedor, Factura_Proveedor,Vale_Interno, Observaciones, Recibido_Por_ID) 
+       VALUES ($1, $2, $3, $4, $5) 
        RETURNING *`,
-      [ID_Proveedor, Numero_Factura_Proveedor, Observaciones, Recibido_Por_ID]
+      [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
