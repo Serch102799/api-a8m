@@ -465,31 +465,37 @@ router.get('/buscar', verifyToken, async (req, res) => {
 
   try {
     const searchTerm = `%${term}%`;
+    
+    // CAMBIO: Se reescribe la consulta para ser mucho más eficiente
     const result = await pool.query(
       `
+      WITH found_refacciones AS (
+        -- Paso 1: Encontrar las 10 refacciones que coinciden (esto es muy rápido con los índices)
+        SELECT id_refaccion, nombre, marca, numero_parte
+        FROM refaccion
+        WHERE nombre ILIKE $1 OR marca ILIKE $1 OR numero_parte ILIKE $1
+        ORDER BY nombre ASC
+        LIMIT 10
+      )
+      -- Paso 2: Ahora, solo para esas 10 refacciones, calcula su stock
       SELECT 
-          r.id_refaccion, 
-          -- CAMBIO: Se concatenan el nombre y el número de parte en una sola columna 'nombre'
-          (r.nombre || ' (' || COALESCE(r.numero_parte, 'S/N') || ')') AS nombre, 
-          r.marca, 
-          r.numero_parte,
-          COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
+        fr.id_refaccion,
+        (fr.nombre || ' (' || COALESCE(fr.numero_parte, 'S/N') || ')') AS nombre,
+        fr.marca,
+        fr.numero_parte,
+        COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
       FROM 
-          refaccion r
+        found_refacciones fr
       LEFT JOIN 
-          lote_refaccion l ON r.id_refaccion = l.id_refaccion
-      WHERE 
-          (r.nombre ILIKE $1 OR r.marca ILIKE $1 OR r.numero_parte ILIKE $1)
+        lote_refaccion l ON fr.id_refaccion = l.id_refaccion
       GROUP BY
-          r.id_refaccion, r.nombre, r.marca, r.numero_parte
-      HAVING
-          COALESCE(SUM(l.cantidad_disponible), 0) > 0
-      ORDER BY 
-          r.nombre ASC
-      LIMIT 10;
+        fr.id_refaccion, fr.nombre, fr.marca, fr.numero_parte
+      ORDER BY
+        fr.nombre ASC;
       `,
       [searchTerm]
     );
+
     res.json(result.rows);
   } catch (error) {
     console.error('Error en búsqueda de refacciones:', error);
