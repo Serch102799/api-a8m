@@ -47,13 +47,62 @@ const checkRole = require('../middleware/checkRole');
  *                     type: number
  *                     example: 5
  */
-router.get('/', verifyToken, async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM insumo ORDER BY nombre ASC');
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener los insumos' });
-  }
+router.get('/', async (req, res) => {
+    const { 
+        page = 1, 
+        limit = 10, 
+        search = '', 
+        tipo = '',
+        sortBy = 'nombre',
+        sortOrder = 'asc'
+    } = req.query;
+
+    try {
+        // --- Construcción de la Consulta ---
+        const params = [];
+        let whereClauses = [];
+
+        if (search.trim()) {
+            params.push(`%${search.trim()}%`);
+            whereClauses.push(`(nombre ILIKE $${params.length} OR marca ILIKE $${params.length})`);
+        }
+
+        if (tipo.trim()) {
+            params.push(tipo.trim());
+            whereClauses.push(`tipo_insumo = $${params.length}`);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // --- Consulta de Conteo Total ---
+        const totalQuery = `SELECT COUNT(*) FROM insumo ${whereString}`;
+        const totalResult = await pool.query(totalQuery, params);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+        // --- Consulta de Datos Paginados ---
+        const allowedSortBy = ['nombre', 'marca', 'tipo_insumo', 'stock_actual', 'unidad_medida'];
+        const sortColumn = allowedSortBy.includes(sortBy) ? sortBy : 'nombre';
+        const sortDirection = sortOrder.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
+        const offset = (page - 1) * limit;
+        const dataQuery = `
+            SELECT * FROM insumo 
+            ${whereString} 
+            ORDER BY ${sortColumn} ${sortDirection} 
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `;
+        const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+
+        // --- Envío de Respuesta Estructurada ---
+        res.json({
+            total: totalItems,
+            data: dataResult.rows
+        });
+
+    } catch (error) {
+        console.error('Error al obtener insumos:', error);
+        res.status(500).json({ message: 'Error al obtener los insumos' });
+    }
 });
 
 /**
@@ -114,21 +163,27 @@ router.get('/', verifyToken, async (req, res) => {
  *       500:
  *         description: Error interno del servidor
  */
-router.post('/', [verifyToken, checkRole(['Admin'])], async (req, res) => {
-  const { nombre, marca, tipo, unidad_medida } = req.body;
-  if (!nombre || !unidad_medida) {
-    return res.status(400).json({ message: 'Nombre y Unidad de Medida son requeridos.' });
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+  // CAMBIO: Se usan los nombres de propiedad correctos que envía el frontend
+  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo } = req.body;
+  
+  if (!nombre || !unidad_medida || !tipo_insumo) {
+    return res.status(400).json({ message: 'Nombre, Unidad de Medida y Tipo son requeridos.' });
   }
+
   try {
     const result = await pool.query(
-      'INSERT INTO insumo (nombre, marca, tipo, unidad_medida) VALUES ($1, $2, $3, $4) RETURNING *',
-      [nombre, marca, tipo, unidad_medida]
+      // CAMBIO: La consulta ahora usa la columna 'tipo_insumo'
+      `INSERT INTO insumo (nombre, marca, tipo_insumo, unidad_medida, stock_minimo) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === '23505') {
       return res.status(400).json({ message: 'El nombre de este insumo ya existe.' });
     }
+    console.error('Error al crear el insumo:', error);
     res.status(500).json({ message: 'Error al crear el insumo' });
   }
 });
@@ -168,23 +223,34 @@ router.post('/', [verifyToken, checkRole(['Admin'])], async (req, res) => {
  *       500:
  *         description: Error al actualizar el insumo
  */
-router.put('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
-    const { id } = req.params;
-    const { stock_minimo } = req.body;
-    try {
-        const result = await pool.query(
-            'UPDATE insumo SET stock_minimo = $1 WHERE id_insumo = $2 RETURNING *',
-            [stock_minimo, id]
-        );
-        if (result.rows.length === 0) {
-            return res.status(404).json({ message: 'Insumo no encontrado' });
-        }
-        res.json(result.rows[0]);
-    } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar el insumo' });
-    }
-});
+router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+  const { id } = req.params;
+  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo } = req.body;
 
+  if (!nombre || !unidad_medida || !tipo_insumo) {
+    return res.status(400).json({ message: 'Nombre, Unidad de Medida y Tipo son requeridos.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE insumo 
+       SET nombre = $1, marca = $2, tipo_insumo = $3, unidad_medida = $4, stock_minimo = $5 
+       WHERE id_insumo = $6 RETURNING *`,
+      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Insumo no encontrado.' });
+    }
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(400).json({ message: 'El nombre de este insumo ya existe.' });
+    }
+    console.error('Error al actualizar el insumo:', error);
+    res.status(500).json({ message: 'Error al actualizar el insumo' });
+  }
+});
 /**
  * @swagger
  * /api/insumos/{id}:
@@ -243,5 +309,19 @@ router.get('/buscar', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al buscar insumos' });
   }
 });
-
+router.get('/:id', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query('SELECT * FROM insumo WHERE id_insumo = $1', [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Insumo no encontrado' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`Error al obtener el insumo ${id}:`, error);
+    res.status(500).json({ message: 'Error al obtener el insumo' });
+  }
+});
 module.exports = router;
