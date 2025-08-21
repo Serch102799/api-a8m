@@ -92,13 +92,19 @@ router.get('/stats', async (req, res) => {
     const valorInventarioPromise = pool.query('SELECT SUM(cantidad_disponible * costo_unitario_final) AS valor_total FROM lote_refaccion');
 
     const topStockPromise = pool.query(`
-      SELECT r.nombre, SUM(l.cantidad_disponible) as stock_actual
-      FROM refaccion r
-      LEFT JOIN lote_refaccion l ON r.id_refaccion = l.id_refaccion
-      GROUP BY r.nombre
-      ORDER BY stock_actual DESC
-      LIMIT 5
-    `);
+  SELECT
+    r.nombre,
+    COALESCE(SUM(l.cantidad_disponible), 0) AS total_stock
+  FROM
+    refaccion r
+  LEFT JOIN
+    lote_refaccion l ON r.id_refaccion = l.id_refaccion
+  GROUP BY
+    r.id_refaccion, r.nombre  -- Se agrupa por ID y nombre para ser preciso
+  ORDER BY
+    total_stock DESC
+  LIMIT 5
+`);
 
     const lowStockItemsPromise = pool.query(`
       SELECT r.nombre, r.stock_minimo, COALESCE(SUM(l.cantidad_disponible), 0) as stock_actual
@@ -137,7 +143,10 @@ router.get('/stats', async (req, res) => {
       totalRefacciones: parseInt(totalRefaccionesRes.rows[0].count, 10),
       refaccionesStockBajo: parseInt(stockBajoRes.rows[0].count, 10),
       valorTotalInventario: parseFloat(valorInventarioRes.rows[0].valor_total || 0),
-      topStock: topStockRes.rows,
+      topStock: topStockRes.rows.map(item => ({
+      nombre: item.nombre,
+      stock_actual: parseFloat(item.total_stock) // Leer 'total_stock'
+  })),
       lowStockItems: lowStockItemsRes.rows,
       ultimasEntradas: ultimasEntradasRes.rows,
       ultimasSalidas: ultimasSalidasRes.rows,
