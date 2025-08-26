@@ -286,6 +286,8 @@ router.delete('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
         res.status(500).json({ message: 'Error al eliminar insumo. Puede que esté en uso en algún registro.' });
     }
 });
+// En routes/insumos.js
+
 router.get('/buscar', verifyToken, async (req, res) => {
   const { term } = req.query;
 
@@ -305,7 +307,6 @@ router.get('/buscar', verifyToken, async (req, res) => {
       FROM 
           insumo
       WHERE 
-          -- CAMBIO: Se usa la columna correcta 'tipo_insumo' en lugar de 'tipo'
           nombre ILIKE $1 OR marca ILIKE $1 OR tipo_insumo::text ILIKE $1
       ORDER BY 
           nombre ASC
