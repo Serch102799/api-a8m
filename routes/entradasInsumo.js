@@ -180,9 +180,9 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
         await client.query('BEGIN');
 
         const entradaResult = await client.query(
-            `INSERT INTO entrada_insumo (id_proveedor, id_empleado, numero_factura, observaciones)
-             VALUES ($1, $2, $3, $4) RETURNING id_entrada_insumo`,
-            [maestro.id_proveedor, maestro.id_empleado, maestro.numero_factura, maestro.observaciones]
+            `INSERT INTO entrada_insumo (id_proveedor, id_empleado, numero_factura, observaciones, razon_social)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id_entrada_insumo`,
+            [maestro.id_proveedor, maestro.id_empleado, maestro.numero_factura, maestro.observaciones, maestro.razon_social]
         );
         const nuevaEntradaId = entradaResult.rows[0].id_entrada_insumo;
 
