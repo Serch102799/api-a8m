@@ -298,18 +298,17 @@ router.get('/buscar', verifyToken, async (req, res) => {
     const result = await pool.query(
       `
       SELECT 
-          i.id_insumo,
-          -- CAMBIO: Se concatenan nombre y marca para un resultado más descriptivo
-          (i.nombre || ' - ' || COALESCE(i.marca, 'S/M')) AS nombre,
-          i.stock_actual,
-          i.unidad_medida
+          id_insumo,
+          (nombre || ' - ' || COALESCE(marca, 'S/M')) AS nombre,
+          stock_actual,
+          unidad_medida
       FROM 
-          insumo i
+          insumo
       WHERE 
-          -- CAMBIO: La búsqueda ahora incluye el nuevo campo 'tipo_insumo'
-          i.nombre ILIKE $1 OR i.marca ILIKE $1 OR i.tipo_insumo::text ILIKE $1
+          -- CAMBIO: Se usa la columna correcta 'tipo_insumo' en lugar de 'tipo'
+          nombre ILIKE $1 OR marca ILIKE $1 OR tipo_insumo::text ILIKE $1
       ORDER BY 
-          i.nombre ASC
+          nombre ASC
       LIMIT 10
       `,
       [searchTerm]
