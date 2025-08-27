@@ -102,35 +102,35 @@ router.get('/stats', verifyToken, async (req, res) => {
       ORDER BY total_stock DESC LIMIT 5
     `);
     const topStockInsumosPromise = pool.query('SELECT nombre, stock_actual FROM insumo ORDER BY stock_actual DESC LIMIT 5');
-
-    // CORRECCIÓN 2: La consulta de entradas de insumos ahora se une a la tabla 'entrada' unificada
+    const lowStockRefaccionesPromise = pool.query(`
+      SELECT r.nombre, r.stock_minimo, COALESCE(SUM(l.cantidad_disponible), 0) as stock_actual
+      FROM refaccion r
+      LEFT JOIN lote_refaccion l ON r.id_refaccion = l.id_refaccion
+      GROUP BY r.id_refaccion, r.nombre, r.stock_minimo
+      HAVING COALESCE(SUM(l.cantidad_disponible), 0) <= r.stock_minimo AND r.stock_minimo > 0
+      ORDER BY (COALESCE(SUM(l.cantidad_disponible), 0)::decimal / NULLIF(r.stock_minimo, 0)) ASC
+      LIMIT 5
+    `);
+    const lowStockInsumosPromise = pool.query(`
+      SELECT nombre, stock_minimo, stock_actual
+      FROM insumo
+      WHERE stock_actual <= stock_minimo AND stock_minimo > 0
+      ORDER BY (stock_actual::decimal / NULLIF(stock_minimo, 0)) ASC
+      LIMIT 5
+    `);
     const ultimasEntradasPromise = pool.query(`
-  (SELECT 
-     ea.fecha_entrada, 
-     r.nombre AS nombre_item, 
-     de.cantidad_recibida, 
-     'Refacción' as tipo_item
-   FROM detalle_entrada de
-   -- CAMBIO: Se ajusta el JOIN para usar tu tabla 'entrada_almacen'
-   JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
-   JOIN refaccion r ON de.id_refaccion = r.id_refaccion)
-  
-  UNION ALL
-  
-  (SELECT 
-     ea.fecha_entrada, 
-     i.nombre AS nombre_item, 
-     dei.cantidad_recibida, 
-     'Insumo' as tipo_item
-   FROM detalle_entrada_insumo dei
-   -- CAMBIO: Se ajusta el JOIN para usar tu tabla 'entrada_almacen'
-   JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
-   JOIN insumo i ON dei.id_insumo = i.id_insumo)
-  
-  ORDER BY fecha_entrada DESC
-  LIMIT 5
-`);
-
+      (SELECT e.fecha_entrada, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
+       FROM detalle_entrada de
+       JOIN entrada_almacen e ON de.id_entrada = e.id_entrada
+       JOIN refaccion r ON de.id_refaccion = r.id_refaccion)
+      UNION ALL
+      (SELECT ei.fecha_entrada, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
+       FROM detalle_entrada_insumo dei
+       JOIN entrada_almacen ei ON dei.id_entrada = ei.id_entrada
+       JOIN insumo i ON dei.id_insumo = i.id_insumo)
+      ORDER BY fecha_entrada DESC
+      LIMIT 5
+    `);
     const ultimasSalidasPromise = pool.query(`
       (SELECT s.fecha_salida, r.nombre AS nombre_item, ds.cantidad_despachada AS cantidad, 'Refacción' as tipo_item
        FROM detalle_salida ds
@@ -145,7 +145,6 @@ router.get('/stats', verifyToken, async (req, res) => {
       ORDER BY fecha_salida DESC
       LIMIT 5
     `);
-
     const topCostoAutobusesPromise = pool.query(`
       SELECT a.economico, COALESCE(SUM(costos.costo_total), 0) as costo_total
       FROM autobus a
@@ -167,29 +166,21 @@ router.get('/stats', verifyToken, async (req, res) => {
       LIMIT 5
     `);
 
-    // CORRECCIÓN 1: Se usa el nombre de la promesa correcta 'ultimasSalidasPromise'
-   const [
+    // CAMBIO: Se corrigieron todos los nombres en el arreglo de Promise.all
+    const [
       totalRefaccionesRes, totalInsumosRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
       valorInventarioRefaccionesRes, valorInventarioInsumosRes, topStockRefaccionesRes,
-      topStockInsumosRes, ultimasEntradasRes, ultimasSalidasRes, topCostoAutobusesRes
+      topStockInsumosRes, lowStockRefaccionesRes, lowStockInsumosRes,
+      ultimasEntradasRes, ultimasSalidasRes, topCostoAutobusesRes
     ] = await Promise.all([
-      totalRefaccionesPromise, 
-      totalInsumosPromise, 
-      stockBajoRefaccionesPromise, 
-      stockBajoInsumosPromise,
-      valorInventarioRefaccionesPromise, 
-      valorInventarioInsumosPromise, 
-      topStockRefaccionesPromise,
-      topStockInsumosPromise,      
-      ultimasEntradasPromise, 
-      ultimasSalidasPromise, 
-      topCostoAutobusesPromise
+      totalRefaccionesPromise, totalInsumosPromise, stockBajoRefaccionesPromise, stockBajoInsumosPromise,
+      valorInventarioRefaccionesPromise, valorInventarioInsumosPromise, topStockRefaccionesPromise,
+      topStockInsumosPromise, lowStockRefaccionesPromise, lowStockInsumosPromise,
+      ultimasEntradasPromise, ultimasSalidasPromise, topCostoAutobusesPromise
     ]);
 
-    // Procesar y combinar los resultados
     const valorTotalInventario = (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) + 
                                  (parseFloat(valorInventarioInsumosRes.rows[0]?.valor_total) || 0);
-
     const stats = {
       totalRefacciones: parseInt(totalRefaccionesRes.rows[0].count, 10),
       totalInsumos: parseInt(totalInsumosRes.rows[0].count, 10),
@@ -198,11 +189,12 @@ router.get('/stats', verifyToken, async (req, res) => {
       valorTotalInventario: valorTotalInventario,
       topStockRefacciones: topStockRefaccionesRes.rows.map(item => ({ nombre: item.nombre, stock_actual: parseFloat(item.total_stock) })),
       topStockInsumos: topStockInsumosRes.rows,
+      lowStockRefacciones: lowStockRefaccionesRes.rows,
+      lowStockInsumos: lowStockInsumosRes.rows,
       ultimasEntradas: ultimasEntradasRes.rows,
       ultimasSalidas: ultimasSalidasRes.rows,
       topCostoAutobuses: topCostoAutobusesRes.rows.map(item => ({ ...item, costo_total: parseFloat(item.costo_total) }))
     };
-
     res.json(stats);
 
   } catch (error) {
