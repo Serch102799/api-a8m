@@ -78,7 +78,7 @@ router.use(verifyToken);
 
 router.get('/stats', verifyToken, async (req, res) => {
   try {
-    // --- Promesas para KPIs ---
+    // --- Promesas para KPIs (Indicadores Clave) ---
     const totalRefaccionesPromise = pool.query('SELECT COUNT(*) FROM refaccion');
     const totalInsumosPromise = pool.query('SELECT COUNT(*) FROM insumo');
     const stockBajoRefaccionesPromise = pool.query(`
@@ -119,14 +119,14 @@ router.get('/stats', verifyToken, async (req, res) => {
       LIMIT 5
     `);
     const ultimasEntradasPromise = pool.query(`
-      (SELECT e.fecha_entrada, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
+      (SELECT ea.fecha_entrada, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
        FROM detalle_entrada de
-       JOIN entrada_almacen e ON de.id_entrada = e.id_entrada
+       JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
        JOIN refaccion r ON de.id_refaccion = r.id_refaccion)
       UNION ALL
-      (SELECT ei.fecha_entrada, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
+      (SELECT ea.fecha_entrada, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
        FROM detalle_entrada_insumo dei
-       JOIN entrada_almacen ei ON dei.id_entrada = ei.id_entrada
+       JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
        JOIN insumo i ON dei.id_insumo = i.id_insumo)
       ORDER BY fecha_entrada DESC
       LIMIT 5
@@ -166,7 +166,7 @@ router.get('/stats', verifyToken, async (req, res) => {
       LIMIT 5
     `);
 
-    // CAMBIO: Se corrigieron todos los nombres en el arreglo de Promise.all
+    // Ejecutar todas las promesas en paralelo
     const [
       totalRefaccionesRes, totalInsumosRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
       valorInventarioRefaccionesRes, valorInventarioInsumosRes, topStockRefaccionesRes,
@@ -179,8 +179,10 @@ router.get('/stats', verifyToken, async (req, res) => {
       ultimasEntradasPromise, ultimasSalidasPromise, topCostoAutobusesPromise
     ]);
 
+    // Procesar y combinar los resultados
     const valorTotalInventario = (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) + 
                                  (parseFloat(valorInventarioInsumosRes.rows[0]?.valor_total) || 0);
+
     const stats = {
       totalRefacciones: parseInt(totalRefaccionesRes.rows[0].count, 10),
       totalInsumos: parseInt(totalInsumosRes.rows[0].count, 10),
@@ -195,6 +197,7 @@ router.get('/stats', verifyToken, async (req, res) => {
       ultimasSalidas: ultimasSalidasRes.rows,
       topCostoAutobuses: topCostoAutobusesRes.rows.map(item => ({ ...item, costo_total: parseFloat(item.costo_total) }))
     };
+
     res.json(stats);
 
   } catch (error) {
