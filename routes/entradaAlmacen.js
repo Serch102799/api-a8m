@@ -32,6 +32,45 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener entradas', error });
   }
 });
+router.get('/detalles/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `
+      -- Seleccionar detalles de REFACCIONES
+      (SELECT 
+        r.nombre AS nombre_item,
+        r.marca,
+        de.cantidad_recibida AS cantidad,
+        l.costo_unitario_final AS costo,
+        'Refacción' AS tipo_item
+      FROM detalle_entrada de
+      JOIN refaccion r ON de.id_refaccion = r.id_refaccion
+      JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+      WHERE de.id_entrada = $1)
+      
+      UNION ALL
+
+      -- Seleccionar detalles de INSUMOS
+      (SELECT 
+        i.nombre AS nombre_item,
+        i.marca,
+        dei.cantidad_recibida AS cantidad,
+        dei.costo_unitario_final AS costo,
+        'Insumo' AS tipo_item
+      FROM detalle_entrada_insumo dei
+      JOIN insumo i ON dei.id_insumo = i.id_insumo
+      WHERE dei.id_entrada = $1)
+      `,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error(`Error al obtener detalles de la entrada ${id}:`, error);
+    res.status(500).json({ message: 'Error al obtener los detalles de la entrada' });
+  }
+});
+
 
 /**
  * @swagger

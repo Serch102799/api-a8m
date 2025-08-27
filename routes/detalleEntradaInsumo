@@ -1,0 +1,141 @@
+const express = require('express');
+const pool = require('../db');
+const router = express.Router();
+const verifyToken = require('../middleware/verifyToken');
+const checkRole = require('../middleware/checkRole');
+
+/**
+ * @swagger
+ * /api/detalle-entrada-insumo:
+ *   post:
+ *     summary: Registrar un detalle de entrada para un insumo
+ *     description: Calcula el costo, actualiza el stock y el costo promedio del insumo, y guarda el registro del detalle.
+ *     tags: [Entradas]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ID_Entrada
+ *               - ID_Insumo
+ *               - Cantidad_Recibida
+ *               - costo_ingresado
+ *               - tipo_costo
+ *               - aplica_iva
+ *             properties:
+ *               ID_Entrada:
+ *                 type: integer
+ *                 example: 1
+ *               ID_Insumo:
+ *                 type: integer
+ *                 example: 15
+ *               Cantidad_Recibida:
+ *                 type: number
+ *                 example: 50
+ *               costo_ingresado:
+ *                 type: number
+ *                 example: 2000
+ *               tipo_costo:
+ *                 type: string
+ *                 enum: [unitario, neto]
+ *                 example: unitario
+ *               aplica_iva:
+ *                 type: boolean
+ *                 example: true
+ *     responses:
+ *       201:
+ *         description: Detalle de insumo creado y stock actualizado
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Detalle de insumo creado y stock actualizado"
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Faltan datos requeridos para procesar la entrada del insumo."
+ *       500:
+ *         description: Error en el servidor
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Error al procesar la entrada del insumo"
+ */
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+  const { 
+    ID_Entrada, 
+    ID_Insumo, 
+    Cantidad_Recibida, 
+    costo_ingresado,
+    tipo_costo,
+    aplica_iva 
+  } = req.body;
+
+  if (!ID_Entrada || !ID_Insumo || !Cantidad_Recibida || !costo_ingresado || !tipo_costo) {
+    return res.status(400).json({ message: 'Faltan datos requeridos para procesar la entrada del insumo.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // --- 1. Lógica de Cálculo de Costo ---
+    const cantidadNueva = parseFloat(Cantidad_Recibida);
+    let costoUnitarioSubtotal = 0;
+    if (tipo_costo === 'unitario') {
+      costoUnitarioSubtotal = parseFloat(costo_ingresado);
+    } else if (tipo_costo === 'neto' && cantidadNueva > 0) {
+      costoUnitarioSubtotal = parseFloat(costo_ingresado) / cantidadNueva;
+    }
+
+    const montoIvaUnitario = aplica_iva ? costoUnitarioSubtotal * 0.16 : 0;
+    const costoUnitarioFinal = costoUnitarioSubtotal + montoIvaUnitario;
+    const costoTotalCompraFinal = costoUnitarioFinal * cantidadNueva;
+
+    // --- 2. Actualización de Costo Promedio y Stock del Insumo ---
+    const insumoActualResult = await client.query(
+      'SELECT stock_actual, costo_unitario_promedio FROM insumo WHERE id_insumo = $1 FOR UPDATE',
+      [ID_Insumo]
+    );
+
+    if (insumoActualResult.rows.length === 0) {
+      throw new Error(`El insumo con ID ${ID_Insumo} no fue encontrado.`);
+    }
+    
+    const stockViejo = parseFloat(insumoActualResult.rows[0].stock_actual);
+    const costoViejo = parseFloat(insumoActualResult.rows[0].costo_unitario_promedio);
+    
+    const valorTotalViejo = stockViejo * costoViejo;
+    const nuevoStockTotal = stockViejo + cantidadNueva;
+    const nuevoCostoPromedio = nuevoStockTotal > 0 ? (valorTotalViejo + costoTotalCompraFinal) / nuevoStockTotal : 0;
+
+    await client.query(
+      `UPDATE insumo SET stock_actual = $1, costo_unitario_promedio = $2 WHERE id_insumo = $3`,
+      [nuevoStockTotal, nuevoCostoPromedio.toFixed(4), ID_Insumo]
+    );
+
+    // --- 3. Guardar el Detalle de la Entrada ---
+    await client.query(
+      `INSERT INTO detalle_entrada_insumo (id_entrada, id_insumo, cantidad_recibida, costo_unitario_subtotal, monto_iva_unitario, costo_unitario_final)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [ID_Entrada, ID_Insumo, cantidadNueva, costoUnitarioSubtotal.toFixed(2), montoIvaUnitario.toFixed(2), costoUnitarioFinal.toFixed(2)]
+    );
+
+    await client.query('COMMIT');
+    res.status(201).json({ message: 'Detalle de insumo creado y stock actualizado' });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error en transacción de entrada de insumo:', error);
+    res.status(500).json({ message: 'Error al procesar la entrada del insumo' });
+  } finally {
+    client.release();
+  }
+});
+
+module.exports = router;

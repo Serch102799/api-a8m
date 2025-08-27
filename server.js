@@ -19,6 +19,7 @@ const entradasInsumoRouter = require('./routes/entradasInsumo');
 const detalleSalidaInsumoRouter = require('./routes/detalleSalidaInsumo');
 const lotesRouter = require('./routes/lotes');
 const reportesRouter = require('./routes/reportes');
+const detalleEntradaInsumoRoutes = require('./routes/detalleEntradaInsumo');
 
 
 const app = express();
@@ -61,7 +62,7 @@ app.use('/api/entradas-insumo', entradasInsumoRouter);
 app.use('/api/detalle-salida-insumo', detalleSalidaInsumoRouter);
 app.use('/api/lotes', lotesRouter);
 app.use('/api/reportes', reportesRouter);
-
+app.use('/api/detalle-entrada-insumo', detalleEntradaInsumoRoutes);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {
