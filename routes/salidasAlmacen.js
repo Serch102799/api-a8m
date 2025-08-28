@@ -83,7 +83,7 @@ router.get('/', async (req, res) => {
       FROM Salida_Almacen s
       LEFT JOIN Autobus a ON s.ID_Autobus = a.ID_Autobus
       LEFT JOIN Empleado e ON s.Solicitado_Por_ID = e.ID_Empleado
-      ORDER BY s.Fecha_Salida DESC
+      ORDER BY s.Fecha_Operacion DESC
     `);
     res.json(result.rows);
   } catch (error) {

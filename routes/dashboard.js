@@ -119,30 +119,30 @@ router.get('/stats', verifyToken, async (req, res) => {
       LIMIT 5
     `);
     const ultimasEntradasPromise = pool.query(`
-      (SELECT ea.fecha_entrada, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
+      (SELECT ea.fecha_operacion, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
        FROM detalle_entrada de
        JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
        JOIN refaccion r ON de.id_refaccion = r.id_refaccion)
       UNION ALL
-      (SELECT ea.fecha_entrada, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
+      (SELECT ea.fecha_operacion, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
        FROM detalle_entrada_insumo dei
        JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
        JOIN insumo i ON dei.id_insumo = i.id_insumo)
-      ORDER BY fecha_entrada DESC
+      ORDER BY fecha_operacion DESC
       LIMIT 5
     `);
     const ultimasSalidasPromise = pool.query(`
-      (SELECT s.fecha_salida, r.nombre AS nombre_item, ds.cantidad_despachada AS cantidad, 'Refacción' as tipo_item
+      (SELECT s.fecha_operacion, r.nombre AS nombre_item, ds.cantidad_despachada AS cantidad, 'Refacción' as tipo_item
        FROM detalle_salida ds
        JOIN salida_almacen s ON ds.id_salida = s.id_salida
        JOIN lote_refaccion l ON ds.id_lote = l.id_lote
        JOIN refaccion r ON l.id_refaccion = r.id_refaccion)
       UNION ALL
-      (SELECT s.fecha_salida, i.nombre AS nombre_item, dsi.cantidad_usada AS cantidad, 'Insumo' as tipo_item
+      (SELECT s.fecha_operacion, i.nombre AS nombre_item, dsi.cantidad_usada AS cantidad, 'Insumo' as tipo_item
        FROM detalle_salida_insumo dsi
        JOIN salida_almacen s ON dsi.id_salida = s.id_salida
        JOIN insumo i ON dsi.id_insumo = i.id_insumo)
-      ORDER BY fecha_salida DESC
+      ORDER BY fecha_operacion DESC
       LIMIT 5
     `);
     const topCostoAutobusesPromise = pool.query(`

@@ -74,7 +74,7 @@ router.get('/:idAutobus', async (req, res) => {
        FROM (
           -- Movimientos de REFACCIONES
           SELECT 
-            sa.fecha_salida as fecha,
+            sa.fecha_operacion as fecha,
             sa.kilometraje_autobus as kilometraje,
             'Refacción' as tipo_item,
             r.nombre,
@@ -91,7 +91,7 @@ router.get('/:idAutobus', async (req, res) => {
 
           -- Movimientos de INSUMOS
           SELECT
-            sa.fecha_salida as fecha,
+            sa.fecha_operacion as fecha,
             sa.kilometraje_autobus as kilometraje,
             'Insumo' as tipo_item,
             i.nombre,

@@ -106,7 +106,7 @@ router.post('/', async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO Entrada_Almacen 
-        (ID_Proveedor, Factura_Proveedor,Vale_Interno, Observaciones, Recibido_Por_ID,Razon_Social ) 
+        (ID_Proveedor, Factura_Proveedor,Vale_Interno, Observaciones, Fecha_Operacion, Recibido_Por_ID,Razon_Social ) 
        VALUES ($1, $2, $3, $4, $5, $6) 
        RETURNING *`,
       [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID,Razon_Social ]
