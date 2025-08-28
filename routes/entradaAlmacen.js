@@ -1,6 +1,9 @@
 const express = require('express');
 const pool = require('../db');
 const router = express.Router();
+const verifyToken = require('../middleware/verifyToken');
+const checkRole = require('../middleware/checkRole');
+router.use(verifyToken);
 
 /**
  * @swagger
@@ -100,20 +103,41 @@ router.get('/detalles/:id', async (req, res) => {
  *       201:
  *         description: Entrada creada
  */
-router.post('/', async (req, res) => {
-  const { ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID,Razon_Social  } = req.body;
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+  // 1. Se recibe 'Fecha_Operacion' del body
+  const { 
+    ID_Proveedor, 
+    Factura_Proveedor, 
+    Vale_Interno, 
+    Observaciones, 
+    Recibido_Por_ID, 
+    Razon_Social,
+    Fecha_Operacion
+  } = req.body;
+
+  if (new Date(Fecha_Operacion) > new Date()) {
+        return res.status(400).json({ message: 'La fecha de operación no puede ser una fecha futura.' });
+    }
+  // 2. Se añade validación para el nuevo campo obligatorio
+  if (!Recibido_Por_ID || !Razon_Social || !Fecha_Operacion) {
+      return res.status(400).json({ message: 'Recibido Por, Razón Social y Fecha de Operación son requeridos.' });
+  }
 
   try {
     const result = await pool.query(
-      `INSERT INTO Entrada_Almacen 
-        (ID_Proveedor, Factura_Proveedor,Vale_Interno, Observaciones, Fecha_Operacion, Recibido_Por_ID,Razon_Social ) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
+      // 3. Se corrige la consulta con los 7 campos y placeholders correctos
+      //    y se usan nombres de columna en snake_case
+      `INSERT INTO entrada_almacen 
+        (id_proveedor, factura_proveedor, vale_interno, observaciones, Recibido_Por_ID, razon_social, fecha_operacion) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) 
        RETURNING *`,
-      [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID,Razon_Social ]
+      // 4. Se añade 'Fecha_Operacion' al arreglo de parámetros
+      [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID, Razon_Social, Fecha_Operacion]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    res.status(500).json({ message: 'Error al crear entrada', error });
+    console.error('Error al crear entrada:', error);
+    res.status(500).json({ message: 'Error al crear la entrada', error: error.message });
   }
 });
 

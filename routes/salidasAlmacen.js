@@ -42,17 +42,41 @@ const router = express.Router();
  *         description: Salida registrada correctamente
  */
 router.post('/', async (req, res) => {
-  const { Tipo_Salida, ID_Autobus, Solicitado_Por_ID, Observaciones, Kilometraje_Autobus } = req.body;
+  // CAMBIO: Se recibe 'Fecha_Operacion' del body
+  const { 
+    Tipo_Salida, 
+    ID_Autobus, 
+    Solicitado_Por_ID, 
+    Observaciones, 
+    Kilometraje_Autobus,
+    Fecha_Operacion 
+  } = req.body;
+  
   const client = await pool.connect(); 
 
   try {
+    // CAMBIO: Se añade la validación para evitar fechas futuras
+    if (new Date(Fecha_Operacion) > new Date()) {
+        return res.status(400).json({ message: 'La fecha de operación no puede ser una fecha futura.' });
+    }
+    
+    // Validación de datos existentes
+    if (!Tipo_Salida || !ID_Autobus || !Solicitado_Por_ID || !Fecha_Operacion) {
+        return res.status(400).json({ message: 'Faltan datos requeridos (Tipo, Autobús, Solicitado Por y Fecha de Operación).' });
+    }
+
     await client.query('BEGIN');
 
     const result = await client.query(
-      `INSERT INTO salida_almacen (tipo_salida, id_autobus, solicitado_por_id, observaciones, kilometraje_autobus)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [Tipo_Salida, ID_Autobus, Solicitado_Por_ID, Observaciones, Kilometraje_Autobus]
+      // CAMBIO: Se añade 'fecha_operacion' a la consulta INSERT
+      // 'fecha_registro' se llenará automáticamente con la fecha actual por defecto en la BD
+      `INSERT INTO salida_almacen (tipo_salida, id_autobus, solicitado_por_id, observaciones, kilometraje_autobus, fecha_operacion)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      // CAMBIO: Se pasa la nueva variable de fecha
+      [Tipo_Salida, ID_Autobus, Solicitado_Por_ID, Observaciones, Kilometraje_Autobus, Fecha_Operacion]
     );
+
+    // La lógica para actualizar el kilometraje del autobús se mantiene igual
     if (ID_Autobus && Kilometraje_Autobus) {
       await client.query(
         `UPDATE autobus 
@@ -61,6 +85,7 @@ router.post('/', async (req, res) => {
         [Kilometraje_Autobus, ID_Autobus]
       );
     }
+    
     await client.query('COMMIT');
     res.status(201).json(result.rows[0]);
 
