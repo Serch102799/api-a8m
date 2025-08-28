@@ -179,7 +179,7 @@ router.get('/:idRefaccion', async (req, res) => {
       SELECT fecha, tipo, cantidad, origen_destino, solicitado_por FROM (
         -- ENTRADAS
         SELECT 
-          ea.fecha_entrada as fecha, 
+          ea.fecha_operacion as fecha, 
           'Entrada' as tipo, 
           de.cantidad_recibida as cantidad, 
           p.nombre_proveedor as origen_destino,
@@ -194,7 +194,7 @@ router.get('/:idRefaccion', async (req, res) => {
         
         -- SALIDAS
         SELECT 
-          sa.fecha_salida as fecha, 
+          sa.fecha_operacion as fecha, 
           'Salida' as tipo, 
           ds.cantidad_despachada as cantidad, 
           ('Autobús #' || a.economico) as origen_destino,
