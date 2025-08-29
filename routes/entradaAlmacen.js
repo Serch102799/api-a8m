@@ -113,39 +113,53 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 
+// En routes/entradaAlmacen.js
+
 router.get('/detalles/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query(
-      `
-      -- Seleccionar detalles de REFACCIONES
+    // Consulta para obtener la lista de detalles (la que ya tienes)
+    const detallesPromise = pool.query( `
       (SELECT 
-        r.nombre AS nombre_item,
-        r.marca,
-        de.cantidad_recibida AS cantidad,
-        l.costo_unitario_final AS costo,
+        r.nombre AS nombre_item, (r.nombre || ' (' || COALESCE(r.numero_parte, 'S/N') || ')') AS descripcion,
+        r.marca, de.cantidad_recibida AS cantidad, l.costo_unitario_final AS costo,
         'Refacción' AS tipo_item
       FROM detalle_entrada de
       JOIN refaccion r ON de.id_refaccion = r.id_refaccion
       JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
       WHERE de.id_entrada = $1)
-      
       UNION ALL
-
-      -- Seleccionar detalles de INSUMOS
       (SELECT 
-        i.nombre AS nombre_item,
-        i.marca,
-        dei.cantidad_recibida AS cantidad,
-        dei.costo_unitario_final AS costo,
+        i.nombre AS nombre_item, (i.nombre || ' - ' || COALESCE(i.marca, 'S/M')) AS descripcion,
+        i.marca, dei.cantidad_recibida AS cantidad, dei.costo_unitario_final AS costo,
         'Insumo' AS tipo_item
       FROM detalle_entrada_insumo dei
       JOIN insumo i ON dei.id_insumo = i.id_insumo
       WHERE dei.id_entrada = $1)
-      `,
-      [id]
-    );
-    res.json(result.rows);
+    `, [id]);
+
+    // Nueva consulta para calcular el valor total de la entrada
+    const totalPromise = pool.query(`
+      SELECT SUM(valor) as valor_neto FROM (
+        SELECT SUM(de.cantidad_recibida * l.costo_unitario_final) as valor
+        FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+        WHERE de.id_entrada = $1
+        UNION ALL
+        SELECT SUM(dei.cantidad_recibida * dei.costo_unitario_final) as valor
+        FROM detalle_entrada_insumo dei
+        WHERE dei.id_entrada = $1
+      ) as costos
+    `, [id]);
+    
+    // Ejecutamos ambas consultas en paralelo
+    const [detallesResult, totalResult] = await Promise.all([detallesPromise, totalPromise]);
+
+    // Enviamos una respuesta estructurada
+    res.json({
+      detalles: detallesResult.rows,
+      valorNeto: parseFloat(totalResult.rows[0].valor_neto) || 0
+    });
+
   } catch (error) {
     console.error(`Error al obtener detalles de la entrada ${id}:`, error);
     res.status(500).json({ message: 'Error al obtener los detalles de la entrada' });
