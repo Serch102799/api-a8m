@@ -22,19 +22,97 @@ router.use(verifyToken);
  *       200:
  *         description: Lista de entradas
  */
-router.get('/', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT ea.*, p.Nombre_Proveedor, e.Nombre AS Nombre_Empleado
-      FROM Entrada_Almacen ea
-      LEFT JOIN Proveedor p ON ea.ID_Proveedor = p.ID_Proveedor
-      LEFT JOIN Empleado e ON ea.Recibido_Por_ID = e.ID_Empleado
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener entradas', error });
-  }
+router.get('/', verifyToken, async (req, res) => {
+    const { 
+        page = 1, 
+        limit = 10, 
+        search = '',
+        fechaInicio = '',
+        fechaFin = '' 
+    } = req.query;
+
+    try {
+        const params = [];
+        let whereClauses = [];
+        
+        if (search.trim()) {
+            params.push(`%${search.trim()}%`);
+            whereClauses.push(`(p.nombre_proveedor ILIKE $${params.length} OR ea.factura_proveedor ILIKE $${params.length} OR e.nombre ILIKE $${params.length})`);
+        }
+        if (fechaInicio) {
+            params.push(fechaInicio);
+            whereClauses.push(`ea.fecha_operacion >= $${params.length}`);
+        }
+        if (fechaFin) {
+            const fechaHasta = new Date(fechaFin);
+            fechaHasta.setDate(fechaHasta.getDate() + 1);
+            params.push(fechaHasta.toISOString().split('T')[0]);
+            whereClauses.push(`ea.fecha_operacion < $${params.length}`);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // --- Consulta de Conteo Total ---
+        const totalQuery = `
+            SELECT COUNT(*) 
+            FROM entrada_almacen ea
+            LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+            LEFT JOIN empleado e ON ea.recibido_por_id = e.id_empleado
+            ${whereString}
+        `;
+        const totalResult = await pool.query(totalQuery, params);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+        // --- Consulta Principal de Datos ---
+        const offset = (page - 1) * limit;
+        const dataQuery = `
+            SELECT
+                ea.*,
+                p.nombre_proveedor,
+                e.nombre as nombre_empleado,
+                COALESCE(entry_totals.valor_neto, 0) AS valor_neto
+            FROM
+                entrada_almacen ea
+            LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+            LEFT JOIN empleado e ON ea.recibido_por_id = e.id_empleado
+            LEFT JOIN (
+                SELECT 
+                    id_entrada, 
+                    SUM(total_linea) as valor_neto 
+                FROM (
+                    SELECT
+                        de.id_entrada,
+                        (de.cantidad_recibida * l.costo_unitario_final) as total_linea
+                    FROM detalle_entrada de
+                    JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+                    UNION ALL
+                    SELECT
+                        dei.id_entrada,
+                        (dei.cantidad_recibida * dei.costo_unitario_final) as total_linea
+                    FROM detalle_entrada_insumo dei
+                ) as details 
+                GROUP BY id_entrada
+            ) as entry_totals ON ea.id_entrada = entry_totals.id_entrada
+            ${whereString}
+            ORDER BY ea.fecha_operacion DESC
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `;
+        
+        const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+        
+        res.json({
+            total: totalItems,
+            data: dataResult.rows
+        });
+
+    } catch (error) {
+        // Este log ahora sí se mostrará si hay un error en la consulta
+        console.error("Error detallado al obtener entradas:", error);
+        res.status(500).json({ message: 'Error al obtener entradas' });
+    }
 });
+
+
 router.get('/detalles/:id', async (req, res) => {
   const { id } = req.params;
   try {
