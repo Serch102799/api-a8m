@@ -53,10 +53,19 @@ router.post(
 
     try {
       // ✅ Consulta actualizada para usar minúsculas consistentes
-      const result = await pool.query(
-        'SELECT * FROM empleado WHERE nombre_usuario = $1',
-        [Nombre_Usuario]
-      );
+     const result = await pool.query(
+        `SELECT 
+           e.id_empleado, e.nombre, e.puesto, e.nombre_usuario, 
+           e.contrasena_hash, -- CAMBIO: Se usa el nombre de columna correcto
+           r.nombre_rol AS rol
+         FROM 
+           empleado e
+         JOIN 
+           roles r ON e.id_rol = r.id_rol
+         WHERE 
+           e.nombre_usuario = $1`,
+        [Nombre_Usuario]
+      );
 
       if (result.rows.length === 0) {
         return res.status(401).json({ message: 'Usuario no encontrado' });

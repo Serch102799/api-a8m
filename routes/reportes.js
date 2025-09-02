@@ -108,7 +108,7 @@ router.get('/:tipoReporte', async (req, res) => {
 
   let dateWhereClause = '';
   if (fechaInicio && fechaFin) {
-    dateWhereClause = `AND sa.fecha_salida BETWEEN $1 AND $2`;
+    dateWhereClause = `AND sa.fecha_operacion BETWEEN $1 AND $2`;
     params = [fechaInicio, fechaFin];
   }
 
@@ -141,7 +141,7 @@ router.get('/:tipoReporte', async (req, res) => {
         SELECT r.nombre, r.marca, COALESCE(SUM(ds.cantidad_despachada), 0) as total_usado
         FROM refaccion r
         LEFT JOIN detalle_salida ds ON r.id_refaccion = ds.id_refaccion
-        LEFT JOIN salida_almacen sa ON ds.id_salida = sa.id_salida AND sa.fecha_salida BETWEEN $1 AND $2
+        LEFT JOIN salida_almacen sa ON ds.id_salida = sa.id_salida AND sa.fecha_operacion BETWEEN $1 AND $2
         GROUP BY r.nombre, r.marca
         ORDER BY total_usado ASC
         LIMIT 10;`;
@@ -150,15 +150,42 @@ router.get('/:tipoReporte', async (req, res) => {
       
     case 'costo-por-autobus':
       query = `
-        SELECT a.economico, SUM(ds.cantidad_despachada * l.costo_unitario_compra) as costo_total
-        FROM detalle_salida ds
-        JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-        JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-        JOIN autobus a ON sa.id_autobus = a.id_autobus
-        WHERE 1=1 ${dateWhereClause}
-        GROUP BY a.economico
-        ORDER BY costo_total DESC;`;
-      break;
+    SELECT
+      a.economico,
+      a.placa,
+      COALESCE(costos_refacciones.total_refacciones, 0) AS gasto_en_refacciones,
+      COALESCE(costos_insumos.total_insumos, 0) AS gasto_en_insumos,
+      (COALESCE(costos_refacciones.total_refacciones, 0) + COALESCE(costos_insumos.total_insumos, 0)) AS gasto_total
+    FROM
+      autobus a
+    LEFT JOIN (
+      -- Subconsulta para calcular el gasto total en REFACCIONES por autobús
+      SELECT
+        sa.id_autobus,
+        SUM(ds.cantidad_despachada * l.costo_unitario_final) as total_refacciones
+      FROM detalle_salida ds
+      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+      WHERE sa.fecha_operacion BETWEEN $1 AND $2
+      GROUP BY sa.id_autobus
+    ) as costos_refacciones ON a.id_autobus = costos_refacciones.id_autobus
+    LEFT JOIN (
+      -- Subconsulta para calcular el gasto total en INSUMOS por autobús
+      SELECT
+        sa.id_autobus,
+        SUM(dsi.cantidad_usada * i.costo_unitario_promedio) as total_insumos
+      FROM detalle_salida_insumo dsi
+      JOIN insumo i ON dsi.id_insumo = i.id_insumo
+      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+      WHERE sa.fecha_operacion BETWEEN $3 AND $4
+      GROUP BY sa.id_autobus
+    ) as costos_insumos ON a.id_autobus = costos_insumos.id_autobus
+    ORDER BY
+      gasto_total DESC;
+  `;
+  // Se necesitan 4 parámetros de fecha para las dos subconsultas
+  params = [fechaInicio, fechaFin, fechaInicio, fechaFin];
+  break;
 
       case 'consumo-insumos-por-autobus':
       query = `
