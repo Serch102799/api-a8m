@@ -81,6 +81,7 @@ router.get('/stats', verifyToken, async (req, res) => {
     // --- Promesas para KPIs (Indicadores Clave) ---
     const totalRefaccionesPromise = pool.query('SELECT COUNT(*) FROM refaccion');
     const totalInsumosPromise = pool.query('SELECT COUNT(*) FROM insumo');
+    const totalPiezasRefaccionesPromise = pool.query("SELECT COALESCE(SUM(cantidad_disponible), 0) AS total_piezas FROM lote_refaccion");
     const stockBajoRefaccionesPromise = pool.query(`
       SELECT COUNT(*) FROM (
         SELECT r.id_refaccion FROM refaccion r
@@ -168,12 +169,12 @@ router.get('/stats', verifyToken, async (req, res) => {
 
     // Ejecutar todas las promesas en paralelo
     const [
-      totalRefaccionesRes, totalInsumosRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
+      totalRefaccionesRes, totalInsumosRes,totalPiezasRefaccionesRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
       valorInventarioRefaccionesRes, valorInventarioInsumosRes, topStockRefaccionesRes,
       topStockInsumosRes, lowStockRefaccionesRes, lowStockInsumosRes,
       ultimasEntradasRes, ultimasSalidasRes, topCostoAutobusesRes
     ] = await Promise.all([
-      totalRefaccionesPromise, totalInsumosPromise, stockBajoRefaccionesPromise, stockBajoInsumosPromise,
+      totalRefaccionesPromise, totalInsumosPromise,totalPiezasRefaccionesPromise, stockBajoRefaccionesPromise, stockBajoInsumosPromise,
       valorInventarioRefaccionesPromise, valorInventarioInsumosPromise, topStockRefaccionesPromise,
       topStockInsumosPromise, lowStockRefaccionesPromise, lowStockInsumosPromise,
       ultimasEntradasPromise, ultimasSalidasPromise, topCostoAutobusesPromise
@@ -186,6 +187,7 @@ router.get('/stats', verifyToken, async (req, res) => {
     const stats = {
       totalRefacciones: parseInt(totalRefaccionesRes.rows[0].count, 10),
       totalInsumos: parseInt(totalInsumosRes.rows[0].count, 10),
+      totalPiezasRefacciones: parseInt(totalPiezasRefaccionesRes.rows[0].total_piezas, 10) || 0,
       refaccionesStockBajo: parseInt(stockBajoRefaccionesRes.rows[0].count, 10),
       insumosStockBajo: parseInt(stockBajoInsumosRes.rows[0].count, 10),
       valorTotalInventario: valorTotalInventario,
