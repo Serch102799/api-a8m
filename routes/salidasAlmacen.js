@@ -98,7 +98,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.get('/', async (req, res) => {
+/* router.get('/', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
@@ -115,27 +115,7 @@ router.get('/', async (req, res) => {
     console.error('Error al obtener salidas:', error);
     res.status(500).json({ message: 'Error al obtener salidas' });
   }
-});
-
-/**
- * @swagger
- * /api/salidas:
- *   get:
- *     summary: Obtener todas las salidas
- *     tags: [Salidas]
- *     responses:
- *       200:
- *         description: Lista de salidas
- */
-router.get('/', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM Salida_Almacen');
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error al obtener salidas:', error);
-    res.status(500).json({ message: 'Error al obtener salidas' });
-  }
-});
+}); */
 /**
  * @swagger
  * /api/detalles/{idSalida}:
@@ -178,15 +158,16 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   const { idSalida } = req.params;
   try {
     const query = `
-      SELECT nombre, cantidad, tipo FROM (
-        SELECT r.nombre, ds.cantidad_despachada as cantidad, 'Refacción' as tipo
+      SELECT nombre, cantidad, tipo_item FROM (
+        SELECT r.nombre, ds.cantidad_despachada as cantidad, 'Refacción' as tipo_item
         FROM detalle_salida ds
-        JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+        JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+        JOIN refaccion r ON l.id_refaccion = r.id_refaccion
         WHERE ds.id_salida = $1
 
         UNION ALL
 
-        SELECT i.nombre, dsi.cantidad_usada as cantidad, 'Insumo' as tipo
+        SELECT i.nombre, dsi.cantidad_usada as cantidad, 'Insumo' as tipo_item
         FROM detalle_salida_insumo dsi
         JOIN insumo i ON dsi.id_insumo = i.id_insumo
         WHERE dsi.id_salida = $1
@@ -200,6 +181,85 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/salidas:
+ *   get:
+ *     summary: Obtener todas las salidas
+ *     tags: [Salidas]
+ *     responses:
+ *       200:
+ *         description: Lista de salidas
+ */
+router.get('/', verifyToken, async (req, res) => {
+    const { 
+        page = 1, 
+        limit = 10, 
+        search = '',
+        fechaInicio = '',
+        fechaFin = '' 
+    } = req.query;
 
+    try {
+        const params = [];
+        let whereClauses = [];
+        
+        // --- Construcción de Filtros ---
+        if (search.trim()) {
+            params.push(`%${search.trim()}%`);
+            whereClauses.push(`(a.economico ILIKE $${params.length} OR s.tipo_salida ILIKE $${params.length} OR e.nombre ILIKE $${params.length})`);
+        }
+        if (fechaInicio) {
+            params.push(fechaInicio);
+            whereClauses.push(`s.fecha_operacion >= $${params.length}`);
+        }
+        if (fechaFin) {
+            const fechaHasta = new Date(fechaFin);
+            fechaHasta.setDate(fechaHasta.getDate() + 1);
+            params.push(fechaHasta.toISOString().split('T')[0]);
+            whereClauses.push(`s.fecha_operacion < $${params.length}`);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // --- Consulta de Conteo Total ---
+        const totalQuery = `
+            SELECT COUNT(*) 
+            FROM salida_almacen s
+            LEFT JOIN autobus a ON s.id_autobus = a.id_autobus
+            LEFT JOIN empleado e ON s.solicitado_por_id = e.id_empleado
+            ${whereString}
+        `;
+        const totalResult = await pool.query(totalQuery, params);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+        // --- Consulta Principal de Datos ---
+        const offset = (page - 1) * limit;
+        const dataQuery = `
+            SELECT
+                s.id_salida, s.fecha_operacion, s.tipo_salida, s.observaciones, s.kilometraje_autobus,
+                a.economico as economico_autobus,
+                e.nombre as nombre_empleado
+            FROM
+                salida_almacen s
+            LEFT JOIN autobus a ON s.id_autobus = a.id_autobus
+            LEFT JOIN empleado e ON s.solicitado_por_id = e.id_empleado
+            ${whereString}
+            ORDER BY s.fecha_operacion DESC
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `;
+        
+        const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+        
+        res.json({
+            total: totalItems,
+            data: dataResult.rows
+        });
+
+    } catch (error) {
+        console.error("Error al obtener salidas:", error);
+        res.status(500).json({ message: 'Error al obtener salidas' });
+    }
+});
 
 module.exports = router;
