@@ -22,6 +22,7 @@ const reportesRouter = require('./routes/reportes');
 const detalleEntradaInsumoRoutes = require('./routes/detalleEntradaInsumo');
 const rolesRouter = require('./routes/roles');
 const inventarioInicialRoutes = require('./routes/inventarioInicial');
+const superadminRoutes = require('./routes/superAdmin');
 
 
 
@@ -68,6 +69,7 @@ app.use('/api/reportes', reportesRouter);
 app.use('/api/detalle-entrada-insumo', detalleEntradaInsumoRoutes);
 app.use('/api/roles', rolesRouter);
 app.use('/api/inventario-inicial', inventarioInicialRoutes);
+app.use('/api/superadmin', superadminRoutes);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {
