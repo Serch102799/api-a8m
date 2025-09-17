@@ -345,11 +345,10 @@ router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (re
     res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === '23505') {
-        let message = 'Uno de los identificadores únicos ya está en uso (Económico, VIN, Chasis, Motor, Placa o Tarjeta).';
+        let message = 'Uno de los identificadores únicos ya está en uso (Económico, VIN, Chasis o Motor).';
         // Opcional: dar un mensaje más específico si se conoce el constraint_name
         if (error.constraint && error.constraint.includes('economico')) message = 'El número económico ya está en uso.';
         if (error.constraint && error.constraint.includes('vin')) message = 'El VIN ya está en uso.';
-        if (error.constraint && error.constraint.includes('placa')) message = 'La placa ya está en uso.';
 
         return res.status(400).json({ message });
     }
