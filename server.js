@@ -23,7 +23,11 @@ const detalleEntradaInsumoRoutes = require('./routes/detalleEntradaInsumo');
 const rolesRouter = require('./routes/roles');
 const inventarioInicialRoutes = require('./routes/inventarioInicial');
 const superadminRoutes = require('./routes/superAdmin');
-
+const cargasCombustibleRoutes = require('./routes/cargasCombustible');
+const rutasRoutes = require('./routes/rutas');
+const operadoresRoutes = require('./routes/operadores');
+const tanquesRoutes = require('./routes/tanques');
+const ubicacionesRoutes = require('./routes/ubicaciones');
 
 
 const app = express();
@@ -70,6 +74,11 @@ app.use('/api/detalle-entrada-insumo', detalleEntradaInsumoRoutes);
 app.use('/api/roles', rolesRouter);
 app.use('/api/inventario-inicial', inventarioInicialRoutes);
 app.use('/api/superadmin', superadminRoutes);
+app.use('/api/cargas-combustible', cargasCombustibleRoutes);
+app.use('/api/operadores', operadoresRoutes);
+app.use('/api/rutas', rutasRoutes);
+app.use('/api/tanques', tanquesRoutes);
+app.use('/api/ubicaciones', ubicacionesRoutes);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {

@@ -186,7 +186,7 @@ router.get('/buscar', verifyToken, async (req, res) => {
   try {
     const searchTerm = `%${term}%`;
     const result = await pool.query(
-      `SELECT id_autobus, economico, kilometraje_actual 
+      `SELECT id_autobus, economico, kilometraje_actual,kilometraje_ultima_carga  
        FROM autobus 
        WHERE economico ILIKE $1 OR marca ILIKE $1 OR placa ILIKE $1 OR vin ILIKE $1
        ORDER BY economico ASC
