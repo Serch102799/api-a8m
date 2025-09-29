@@ -48,7 +48,7 @@ router.get('/lista-simple', verifyToken, async (req, res) => {
 });
 
 // --- POST / (Crear un nuevo tanque) ---
-router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion } = req.body;
     if (!nombre_tanque || !id_ubicacion) {
         return res.status(400).json({ message: 'Nombre del tanque y ubicación son requeridos.' });
@@ -65,7 +65,7 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
 });
 
 // --- PUT /:id (Actualizar un tanque) ---
-router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { id } = req.params;
     const { nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion } = req.body;
     if (!nombre_tanque || !id_ubicacion) {
@@ -89,7 +89,7 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
 });
 
 // --- DELETE /:id (Eliminar un tanque) ---
-router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.delete('/:id', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
     try {
         const result = await pool.query('DELETE FROM tanques_combustible WHERE id_tanque = $1 RETURNING *', [id]);
@@ -102,7 +102,7 @@ router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async
         res.status(500).json({ message: 'Error al eliminar el tanque' });
     }
 });
-router.post('/recargar/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.post('/recargar/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { id } = req.params;
     const { litros_a_cargar } = req.body;
     const id_empleado = req.user.id; // Para un futuro log de auditoría

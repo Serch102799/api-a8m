@@ -73,7 +73,7 @@ router.get('/', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { 
         id_autobus, id_empleado_operador, id_ubicacion, fecha_operacion, 
         km_final, litros_cargados, rutas_realizadas, motivo_desviacion 
