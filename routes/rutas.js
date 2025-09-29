@@ -4,6 +4,15 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+
+router.get('/lista-simple', verifyToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id_ruta, nombre_ruta FROM rutas ORDER BY nombre_ruta');
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al obtener la lista de rutas' });
+    }
+});
 // GET /api/rutas - Obtener todas las rutas (con paginación y búsqueda simple)
 router.get('/', verifyToken, async (req, res) => {
     const { page = 1, limit = 10, search = '' } = req.query;

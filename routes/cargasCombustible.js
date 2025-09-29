@@ -4,6 +4,74 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+router.get('/', verifyToken, async (req, res) => {
+    const { 
+        page = 1, 
+        limit = 10, 
+        search = '', 
+        id_ruta = '' 
+    } = req.query;
+
+    try {
+        const params = [];
+        let whereClauses = [];
+        
+        // --- Construcción de Filtros ---
+        if (search.trim()) {
+            params.push(`%${search.trim()}%`);
+            whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
+        }
+        if (id_ruta) {
+            // Se usa una subconsulta para filtrar por las cargas que contienen esa ruta
+            whereClauses.push(`cc.id_carga IN (SELECT id_carga FROM cargas_combustible_rutas WHERE id_ruta = ${parseInt(id_ruta)})`);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // --- Consulta de Conteo Total ---
+        const totalQuery = `
+            SELECT COUNT(*) 
+            FROM cargas_combustible cc
+            LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
+            LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
+            ${whereString}
+        `;
+        const totalResult = await pool.query(totalQuery, params);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+        // --- Consulta Principal de Datos ---
+        const offset = (page - 1) * limit;
+        const dataQuery = `
+            SELECT 
+                cc.*,
+                a.economico,
+                o.nombre_completo as nombre_operador,
+                d.nombre as nombre_despachador,
+                (SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
+                 FROM cargas_combustible_rutas ccr
+                 JOIN rutas r ON ccr.id_ruta = r.id_ruta
+                 WHERE ccr.id_carga = cc.id_carga) as rutas_info
+            FROM cargas_combustible cc
+            LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
+            LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
+            LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
+            ${whereString}
+            ORDER BY cc.fecha_operacion DESC 
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `;
+        
+        const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+        
+        res.json({
+            total: totalItems,
+            data: dataResult.rows
+        });
+
+    } catch (error) {
+        console.error('Error al obtener historial de cargas:', error);
+        res.status(500).json({ message: 'Error al obtener el historial' });
+    }
+});
 
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
     const { 
