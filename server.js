@@ -28,6 +28,7 @@ const rutasRoutes = require('./routes/rutas');
 const operadoresRoutes = require('./routes/operadores');
 const tanquesRoutes = require('./routes/tanques');
 const ubicacionesRoutes = require('./routes/ubicaciones');
+const trasladosRoutes = require('./routes/traslados');
 
 
 const app = express();
@@ -79,6 +80,7 @@ app.use('/api/operadores', operadoresRoutes);
 app.use('/api/rutas', rutasRoutes);
 app.use('/api/tanques', tanquesRoutes);
 app.use('/api/ubicaciones', ubicacionesRoutes);
+app.use('/api/traslados', trasladosRoutes);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {
