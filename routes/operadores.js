@@ -9,7 +9,23 @@ const checkRole = require('../middleware/checkRole');
  *   - name: Operadores
  *     description: Gestión del catálogo de operadores (chóferes)
  */
-
+router.get('/buscar', verifyToken, async (req, res) => {
+    const { term } = req.query;
+    if (!term || term.length < 1) { return res.json([]); }
+    try {
+        const searchTerm = `%${term}%`;
+        const result = await pool.query(
+            `SELECT id_operador, nombre_completo 
+             FROM operadores 
+             WHERE nombre_completo ILIKE $1
+             ORDER BY nombre_completo ASC LIMIT 10`,
+            [searchTerm]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al buscar operadores' });
+    }
+});
 /**
  * @swagger
  * /operadores:
