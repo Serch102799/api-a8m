@@ -22,22 +22,81 @@ const router = express.Router();
  *       200:
  *         description: Lista de refacciones
  */
-router.get('/', async (req, res) => {
-  try {
-    // La consulta ahora suma el stock de la tabla de lotes
-    const result = await pool.query(`
-      SELECT 
-        r.*, 
-        COALESCE(SUM(l.cantidad_disponible), 0) as stock_actual
-      FROM refaccion r
-      LEFT JOIN lote_refaccion l ON r.id_refaccion = l.id_refaccion
-      GROUP BY r.id_refaccion
-      ORDER BY r.nombre ASC
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener refacciones' });
-  }
+router.get('/', verifyToken, async (req, res) => {
+    const { 
+        page = 1, 
+        limit = 10, 
+        search = '', 
+        sortBy = 'nombre', 
+        sortOrder = 'asc',
+        filtroCategoria = '',
+        filtroMarca = ''
+    } = req.query;
+
+    try {
+        const params = [];
+        let whereClauses = [];
+        
+        if (search.trim()) {
+            params.push(`%${search.trim()}%`);
+            whereClauses.push(`(r.nombre ILIKE $${params.length} OR r.numero_parte ILIKE $${params.length})`);
+        }
+        if (filtroCategoria) {
+            params.push(filtroCategoria);
+            whereClauses.push(`r.categoria = $${params.length}`);
+        }
+        if (filtroMarca) {
+            params.push(filtroMarca);
+            whereClauses.push(`r.marca = $${params.length}`);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        const totalQuery = `SELECT COUNT(*) FROM refaccion r ${whereString}`;
+        const totalResult = await pool.query(totalQuery, params);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+
+        const allowedSortBy = ['nombre', 'marca', 'stock_actual', 'ultimo_costo'];
+        const sortColumn = allowedSortBy.includes(sortBy) ? sortBy : 'nombre';
+        const sortDirection = sortOrder.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+        const offset = (page - 1) * limit;
+
+        const dataQuery = `
+            SELECT
+                r.*,
+                COALESCE(s.stock_actual, 0) AS stock_actual,
+                lc.ultimo_costo
+            FROM
+                refaccion r
+            LEFT JOIN (
+                SELECT id_refaccion, SUM(cantidad_disponible) as stock_actual
+                FROM lote_refaccion
+                GROUP BY id_refaccion
+            ) s ON r.id_refaccion = s.id_refaccion
+            LEFT JOIN (
+                SELECT DISTINCT ON (l.id_refaccion) 
+                    l.id_refaccion, 
+                    l.costo_unitario_final as ultimo_costo
+                FROM lote_refaccion l
+                JOIN detalle_entrada de ON l.id_detalle_entrada = de.id_detalle_entrada
+                ORDER BY l.id_refaccion, de.id_entrada DESC
+            ) lc ON r.id_refaccion = lc.id_refaccion
+            ${whereString}
+            ORDER BY ${sortColumn} ${sortDirection}
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `;
+        
+        const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+        
+        res.json({
+            total: totalItems,
+            data: dataResult.rows
+        });
+
+    } catch (error) {
+        console.error("Error al obtener refacciones:", error);
+        res.status(500).json({ message: 'Error al obtener refacciones' });
+    }
 });
 
 /**
