@@ -28,7 +28,9 @@ router.get('/', verifyToken, async (req, res) => {
         limit = 10, 
         search = '',
         fechaInicio = '',
-        fechaFin = '' 
+        fechaFin = '' ,
+        sortBy = 'fecha_operacion', 
+        sortOrder = 'desc'
     } = req.query;
 
     try {

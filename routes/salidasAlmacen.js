@@ -158,8 +158,13 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   const { idSalida } = req.params;
   try {
     const query = `
-      SELECT nombre, cantidad, tipo_item FROM (
-        SELECT r.nombre, ds.cantidad_despachada as cantidad, 'Refacción' as tipo_item
+      SELECT nombre, cantidad, costo_unitario, tipo_item FROM (
+        -- Consulta para Refacciones
+        SELECT 
+          r.nombre, 
+          ds.cantidad_despachada as cantidad, 
+          l.costo_unitario_final as costo_unitario, -- Se añade el costo del lote
+          'Refacción' as tipo_item
         FROM detalle_salida ds
         JOIN lote_refaccion l ON ds.id_lote = l.id_lote
         JOIN refaccion r ON l.id_refaccion = r.id_refaccion
@@ -167,7 +172,12 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
 
         UNION ALL
 
-        SELECT i.nombre, dsi.cantidad_usada as cantidad, 'Insumo' as tipo_item
+        -- Consulta para Insumos
+        SELECT 
+          i.nombre, 
+          dsi.cantidad_usada as cantidad, 
+          i.costo_unitario_promedio as costo_unitario, -- Se añade el costo promedio del insumo
+          'Insumo' as tipo_item
         FROM detalle_salida_insumo dsi
         JOIN insumo i ON dsi.id_insumo = i.id_insumo
         WHERE dsi.id_salida = $1
