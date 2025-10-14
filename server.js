@@ -29,6 +29,8 @@ const operadoresRoutes = require('./routes/operadores');
 const tanquesRoutes = require('./routes/tanques');
 const ubicacionesRoutes = require('./routes/ubicaciones');
 const trasladosRoutes = require('./routes/traslados');
+const produccionRouter = require('./routes/produccion');
+const productosCompuestosRouter = require('./routes/productosCompuestos');
 
 
 const app = express();
@@ -81,6 +83,8 @@ app.use('/api/rutas', rutasRoutes);
 app.use('/api/tanques', tanquesRoutes);
 app.use('/api/ubicaciones', ubicacionesRoutes);
 app.use('/api/traslados', trasladosRoutes);
+app.use('/api/produccion', produccionRouter);
+app.use('/api/productos-compuestos', productosCompuestosRouter); 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {
