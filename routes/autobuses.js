@@ -579,6 +579,33 @@ router.get('/:idEntrada', async (req, res) => {
   }
 });
 
+router.post('/:id/sync-km-carga', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+    const { id } = req.params;
+    const { kilometraje } = req.body;
+
+    if (kilometraje === undefined || kilometraje < 0) {
+        return res.status(400).json({ message: 'Se requiere un valor de kilometraje válido.' });
+    }
+
+    try {
+        const result = await pool.query(
+            'UPDATE autobus SET kilometraje_ultima_carga = $1 WHERE id_autobus = $2 RETURNING *',
+            [kilometraje, id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Autobús no encontrado.' });
+        }
+
+        res.status(200).json({ message: 'Kilometraje de última carga actualizado exitosamente.' });
+
+    } catch (error) {
+        console.error('Error al sincronizar kilometraje de carga:', error);
+        res.status(500).json({ message: 'Error en el servidor.' });
+    }
+});
+
+
 
 module.exports = router;
 
