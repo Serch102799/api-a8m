@@ -157,14 +157,13 @@ router.post('/', async (req, res) => {
 router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   const { idSalida } = req.params;
   try {
+    // CAMBIO: La consulta ahora selecciona el ID de cada detalle y lo renombra como 'id_detalle'
     const query = `
-      SELECT nombre, cantidad, costo_unitario, tipo_item FROM (
-        -- Consulta para Refacciones
+      SELECT id_detalle, nombre_item, cantidad, tipo_item, costo_unitario, cantidad_devuelta FROM (
         SELECT 
-          r.nombre, 
-          ds.cantidad_despachada as cantidad, 
-          l.costo_unitario_final as costo_unitario, -- Se añade el costo del lote
-          'Refacción' as tipo_item
+          ds.id_detalle_salida as id_detalle, r.nombre as nombre_item, 
+          ds.cantidad_despachada as cantidad, 'refaccion' as tipo_item,
+          l.costo_unitario_final as costo_unitario, ds.cantidad_devuelta
         FROM detalle_salida ds
         JOIN lote_refaccion l ON ds.id_lote = l.id_lote
         JOIN refaccion r ON l.id_refaccion = r.id_refaccion
@@ -174,10 +173,9 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
 
         -- Consulta para Insumos
         SELECT 
-          i.nombre, 
-          dsi.cantidad_usada as cantidad, 
-          i.costo_unitario_promedio as costo_unitario, -- Se añade el costo promedio del insumo
-          'Insumo' as tipo_item
+          dsi.id_detalle_salida_insumo as id_detalle, i.nombre as nombre_item, 
+          dsi.cantidad_usada as cantidad, 'insumo' as tipo_item,
+          dsi.costo_al_momento as costo_unitario, dsi.cantidad_devuelta
         FROM detalle_salida_insumo dsi
         JOIN insumo i ON dsi.id_insumo = i.id_insumo
         WHERE dsi.id_salida = $1

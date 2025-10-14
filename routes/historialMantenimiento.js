@@ -110,24 +110,26 @@ router.get('/:idAutobus', async (req, res) => {
 
     // Consulta para calcular el COSTO TOTAL (sumando refacciones e insumos)
     const costoTotalPromise = pool.query(
-      `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
-          -- Costos de REFACCIONES (desde el lote)
-          SELECT SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
-          FROM detalle_salida ds
-          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-          WHERE sa.id_autobus = $1
+  `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
+      -- Costos de REFACCIONES (calcula sobre la cantidad neta)
+      SELECT 
+        SUM((ds.cantidad_despachada - ds.cantidad_devuelta) * l.costo_unitario_final) as costo_total
+      FROM detalle_salida ds
+      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+      WHERE sa.id_autobus = $1
 
-          UNION ALL
+      UNION ALL
 
-          -- Costos de INSUMOS (desde el detalle del insumo)
-          SELECT SUM(dsi.cantidad_usada * dsi.costo_al_momento) as costo_total
-          FROM detalle_salida_insumo dsi
-          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
-          WHERE sa.id_autobus = $1
-      ) as costos`,
-      [idAutobus]
-    );
+      -- Costos de INSUMOS (calcula sobre la cantidad neta)
+      SELECT 
+        SUM((dsi.cantidad_usada - dsi.cantidad_devuelta) * dsi.costo_al_momento) as costo_total
+      FROM detalle_salida_insumo dsi
+      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+      WHERE sa.id_autobus = $1
+  ) as costos`,
+  [idAutobus]
+);
 
     const [historialResult, costoTotalResult] = await Promise.all([
       historialPromise,

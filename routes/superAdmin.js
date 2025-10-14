@@ -422,4 +422,81 @@ router.delete('/detalles-entrada/:tipo/:id', [verifyToken, checkRole(['SuperUsua
     }
 });
 
+router.post('/devolucion', [verifyToken, checkRole(['SuperUsuario'])], async (req, res) => {
+    const { tipo_item, id_detalle_salida, cantidad_devuelta, motivo } = req.body;
+    const id_empleado = req.user.id;
+
+    if (!tipo_item || !id_detalle_salida || !cantidad_devuelta || cantidad_devuelta <= 0 || !motivo) {
+        return res.status(400).json({ message: 'Todos los campos son requeridos.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Crear el registro de auditoría en 'ajuste_inventario'
+        const ajusteResult = await client.query(
+            `INSERT INTO ajuste_inventario (id_empleado, tipo_ajuste, motivo, fecha_ajuste)
+             VALUES ($1, 'Devolución', $2, NOW()) RETURNING id_ajuste`,
+            [id_empleado, motivo]
+        );
+        const nuevoAjusteId = ajusteResult.rows[0].id_ajuste;
+
+        if (tipo_item === 'refaccion') {
+            const detalleSalida = await client.query('SELECT * FROM detalle_salida WHERE id_detalle_salida = $1 FOR UPDATE', [id_detalle_salida]);
+            if (detalleSalida.rows.length === 0) throw new Error('El detalle de la salida no existe.');
+            
+            const { id_lote, cantidad_despachada, cantidad_devuelta: yaDevueltos } = detalleSalida.rows[0];
+            const cantidadMaximaADevolver = parseFloat(cantidad_despachada) - parseFloat(yaDevueltos);
+
+            if (cantidad_devuelta > cantidadMaximaADevolver) {
+                throw new Error(`No se puede devolver más de la cantidad pendiente. Pendiente: ${cantidadMaximaADevolver}`);
+            }
+
+            // Actualizar el stock en el lote original
+            await client.query('UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible + $1 WHERE id_lote = $2', [cantidad_devuelta, id_lote]);
+            // Actualizar la cantidad devuelta en el detalle de la salida
+            await client.query('UPDATE detalle_salida SET cantidad_devuelta = cantidad_devuelta + $1 WHERE id_detalle_salida = $2', [cantidad_devuelta, id_detalle_salida]);
+            // Registrar el detalle del ajuste
+            await client.query(`INSERT INTO ajuste_detalle_refaccion (id_ajuste, id_lote, cantidad_ajustada) VALUES ($1, $2, $3)`, [nuevoAjusteId, id_lote, cantidad_devuelta]);
+
+        } else if (tipo_item === 'insumo') {
+            const detalleSalida = await client.query('SELECT * FROM detalle_salida_insumo WHERE id_detalle_salida_insumo = $1 FOR UPDATE', [id_detalle_salida]);
+            if (detalleSalida.rows.length === 0) throw new Error('El detalle de la salida no existe.');
+            
+            const { id_insumo, cantidad_usada, costo_al_momento, cantidad_devuelta: yaDevueltos } = detalleSalida.rows[0];
+            const cantidadMaximaADevolver = parseFloat(cantidad_usada) - parseFloat(yaDevueltos);
+
+            if (cantidad_devuelta > cantidadMaximaADevolver) {
+                throw new Error(`No se puede devolver más de la cantidad pendiente. Pendiente: ${cantidadMaximaADevolver}`);
+            }
+            
+            const insumo = await client.query('SELECT stock_actual, costo_unitario_promedio FROM insumo WHERE id_insumo = $1 FOR UPDATE', [id_insumo]);
+            const stockViejo = parseFloat(insumo.rows[0].stock_actual);
+            const costoViejo = parseFloat(insumo.rows[0].costo_unitario_promedio);
+
+            const nuevoStock = stockViejo + parseFloat(cantidad_devuelta);
+            const nuevoValorTotal = (stockViejo * costoViejo) + (parseFloat(cantidad_devuelta) * parseFloat(costo_al_momento));
+            const nuevoCostoPromedio = nuevoStock > 0 ? nuevoValorTotal / nuevoStock : 0;
+            
+            await client.query('UPDATE insumo SET stock_actual = $1, costo_unitario_promedio = $2 WHERE id_insumo = $3', [nuevoStock, nuevoCostoPromedio, id_insumo]);
+            await client.query('UPDATE detalle_salida_insumo SET cantidad_devuelta = cantidad_devuelta + $1 WHERE id_detalle_salida_insumo = $2', [cantidad_devuelta, id_detalle_salida]);
+            await client.query(`INSERT INTO ajuste_detalle_insumo (id_ajuste, id_insumo, cantidad_ajustada) VALUES ($1, $2, $3)`, [nuevoAjusteId, id_insumo, cantidad_devuelta]);
+
+        } else {
+            throw new Error('Tipo de item no válido.');
+        }
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: 'Devolución registrada exitosamente. El stock y los costos han sido actualizados.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error en transacción de devolución:', error);
+        res.status(500).json({ message: error.message || 'Error al procesar la devolución.' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
