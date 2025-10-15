@@ -73,7 +73,7 @@ router.get('/', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     // CAMBIO: Se reciben los nuevos campos para el cálculo dual
     const { 
         id_autobus, id_empleado_operador, id_ubicacion, fecha_operacion, 
