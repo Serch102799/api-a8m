@@ -5,17 +5,17 @@ const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
 router.get('/', verifyToken, async (req, res) => {
-    const { 
-        page = 1, 
-        limit = 10, 
-        search = '', 
-        id_ruta = '' 
+    const {
+        page = 1,
+        limit = 10,
+        search = '',
+        id_ruta = ''
     } = req.query;
 
     try {
         const params = [];
         let whereClauses = [];
-        
+
         // --- Construcción de Filtros ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
@@ -59,9 +59,9 @@ router.get('/', verifyToken, async (req, res) => {
             ORDER BY cc.fecha_operacion DESC 
             LIMIT $${params.length + 1} OFFSET $${params.length + 2}
         `;
-        
+
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
-        
+
         res.json({
             total: totalItems,
             data: dataResult.rows
@@ -75,8 +75,8 @@ router.get('/', verifyToken, async (req, res) => {
 
 router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     // CAMBIO: Se reciben los nuevos campos para el cálculo dual
-    const { 
-        id_autobus, id_empleado_operador, id_ubicacion, fecha_operacion, 
+    const {
+        id_autobus, id_empleado_operador, id_ubicacion, fecha_operacion,
         km_final, litros_cargados, motivo_desviacion,
         tipo_calculo, // 'dias' o 'vueltas'
         id_ruta_principal, // para el modo 'dias'
@@ -133,20 +133,22 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
         if (alerta_kilometraje && !motivo_desviacion) {
             throw new Error(`La desviación de ${desviacion_km.toFixed(2)} km es muy alta. Se requiere un motivo.`);
         }
-        
+
         // 5. Insertar el registro de carga con los campos correspondientes
         const cargaResult = await client.query(
             `INSERT INTO cargas_combustible (
-                id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
-                km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
-                km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
-                id_ruta_principal, dias_laborados
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id_carga`,
+        id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
+        km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
+        km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
+        id_ruta_principal, dias_laborados, tipo_calculo
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id_carga`,
             [
                 id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
                 km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
                 km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
-                id_ruta_principal, dias_laborados
+                tipo_calculo === 'dias' ? id_ruta_principal : null,  // <-- AQUÍ: null si es 'vueltas'
+                tipo_calculo === 'dias' ? dias_laborados : null,      // <-- AQUÍ: null si es 'vueltas'
+                tipo_calculo
             ]
         );
         const nuevaCargaId = cargaResult.rows[0].id_carga;
@@ -157,10 +159,10 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
                 await client.query(`INSERT INTO cargas_combustible_rutas (id_carga, id_ruta, numero_vueltas) VALUES ($1, $2, $3)`, [nuevaCargaId, rutaDetalle.id_ruta, rutaDetalle.vueltas]);
             }
         }
-        
+
         // 7. Actualizar kilometrajes del autobús (sin cambios)
         await client.query('UPDATE autobus SET kilometraje_actual = $1, kilometraje_ultima_carga = $1 WHERE id_autobus = $2', [km_final, id_autobus]);
-        
+
         // 8. Actualizar el nivel del tanque (sin cambios)
         await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_tanque = $2', [litros_cargados, id_tanque]);
 
