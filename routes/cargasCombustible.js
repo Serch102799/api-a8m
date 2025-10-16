@@ -9,7 +9,8 @@ router.get('/', verifyToken, async (req, res) => {
         page = 1,
         limit = 10,
         search = '',
-        id_ruta = ''
+        id_ruta = '',
+        tipo_calculo = 'vueltas'
     } = req.query;
 
     try {
@@ -21,10 +22,25 @@ router.get('/', verifyToken, async (req, res) => {
             params.push(`%${search.trim()}%`);
             whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
         }
-        if (id_ruta) {
-            // Se usa una subconsulta para filtrar por las cargas que contienen esa ruta
-            whereClauses.push(`cc.id_carga IN (SELECT id_carga FROM cargas_combustible_rutas WHERE id_ruta = ${parseInt(id_ruta)})`);
+
+        // CAMBIO: El filtro de ruta depende del tipo_calculo
+        if (id_ruta && id_ruta !== '') {
+            params.push(parseInt(id_ruta));
+            
+            if (tipo_calculo === 'vueltas') {
+                // Para vueltas: usar la tabla de relación cargas_combustible_rutas
+                whereClauses.push(`cc.id_carga IN (
+                    SELECT DISTINCT id_carga FROM cargas_combustible_rutas WHERE id_ruta = $${params.length}
+                )`);
+            } else if (tipo_calculo === 'dias') {
+                // Para días: filtrar por id_ruta_principal
+                whereClauses.push(`cc.id_ruta_principal = $${params.length}`);
+            }
         }
+
+        // NUEVO: Filtrar por tipo_calculo en ambos casos
+        params.push(tipo_calculo);
+        whereClauses.push(`cc.tipo_calculo = $${params.length}`);
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
@@ -41,16 +57,30 @@ router.get('/', verifyToken, async (req, res) => {
 
         // --- Consulta Principal de Datos ---
         const offset = (page - 1) * limit;
+        
+        // CAMBIO: Condicionar el SELECT de rutas según tipo_calculo
+        let selectRutas = '';
+        if (tipo_calculo === 'vueltas') {
+            // Para vueltas: mostrar todas las rutas con sus vueltas
+            selectRutas = `(SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
+                 FROM cargas_combustible_rutas ccr
+                 JOIN rutas r ON ccr.id_ruta = r.id_ruta
+                 WHERE ccr.id_carga = cc.id_carga) as rutas_y_vueltas`;
+        } else if (tipo_calculo === 'dias') {
+            // Para días: mostrar solo la ruta principal con el número de días
+            selectRutas = `COALESCE(
+                (SELECT r.nombre_ruta FROM rutas r WHERE r.id_ruta = cc.id_ruta_principal),
+                'Sin especificar'
+            ) as rutas_y_vueltas`;
+        }
+
         const dataQuery = `
             SELECT 
                 cc.*,
                 a.economico,
                 o.nombre_completo as nombre_operador,
                 d.nombre as nombre_despachador,
-                (SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
-                 FROM cargas_combustible_rutas ccr
-                 JOIN rutas r ON ccr.id_ruta = r.id_ruta
-                 WHERE ccr.id_carga = cc.id_carga) as rutas_info
+                ${selectRutas}
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
@@ -62,9 +92,20 @@ router.get('/', verifyToken, async (req, res) => {
 
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
+        // Agregar campo adicional para modo días (días_laborados)
+        const dataWithDays = dataResult.rows.map(row => {
+            if (tipo_calculo === 'dias') {
+                return {
+                    ...row,
+                    rutas_y_vueltas: `${row.rutas_y_vueltas} (${row.dias_laborados} días)`
+                };
+            }
+            return row;
+        });
+
         res.json({
             total: totalItems,
-            data: dataResult.rows
+            data: dataWithDays
         });
 
     } catch (error) {
@@ -72,7 +113,6 @@ router.get('/', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Error al obtener el historial' });
     }
 });
-
 router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     // CAMBIO: Se reciben los nuevos campos para el cálculo dual
     const {

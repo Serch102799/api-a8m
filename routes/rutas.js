@@ -58,7 +58,7 @@ router.get('/:id', verifyToken, async (req, res) => {
 });
 
 // POST /api/rutas - Crear una nueva ruta
-router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], async (req, res) => {
     const { nombre_ruta, descripcion, kilometraje_vuelta, vueltas_diarias_promedio } = req.body;
     
     // Validaciones
@@ -91,7 +91,7 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
 });
 
 // PUT /api/rutas/:id - Actualizar una ruta
-router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
     const { nombre_ruta, descripcion, kilometraje_vuelta, vueltas_diarias_promedio } = req.body;
     
