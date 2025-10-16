@@ -4,13 +4,6 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
-/**
- * @swagger
- * tags:
- * - name: Tanques
- * description: Gestión del catálogo de tanques de combustible
- */
-
 // --- GET / (Obtener todos los tanques y totales por ubicación) ---
 router.get('/', verifyToken, async (req, res) => {
     try {
@@ -47,6 +40,24 @@ router.get('/lista-simple', verifyToken, async (req, res) => {
     }
 });
 
+// --- GET /:id/historial-recargas (Obtener historial de recargas de un tanque) ---
+router.get('/:id/historial-recargas', verifyToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT id_recarga, litros_cargados, fecha_operacion, observaciones 
+             FROM historial_recargas 
+             WHERE id_tanque = $1 
+             ORDER BY fecha_operacion DESC LIMIT 50`,
+            [id]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error al obtener historial de recargas:', error);
+        res.status(500).json({ message: 'Error al obtener el historial de recargas' });
+    }
+});
+
 // --- POST / (Crear un nuevo tanque) ---
 router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion } = req.body;
@@ -56,10 +67,11 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'
     try {
         const result = await pool.query(
             'INSERT INTO tanques_combustible (nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion) VALUES ($1, $2, $3, $4) RETURNING *',
-            [nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion]
+            [nombre_tanque, capacidad_litros || 0, nivel_actual_litros || 0, id_ubicacion]
         );
         res.status(201).json(result.rows[0]);
     } catch (error) {
+        console.error('Error al crear el tanque:', error);
         res.status(500).json({ message: 'Error al crear el tanque' });
     }
 });
@@ -89,7 +101,7 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiese
 });
 
 // --- DELETE /:id (Eliminar un tanque) ---
-router.delete('/:id', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], async (req, res) => {
+router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { id } = req.params;
     try {
         const result = await pool.query('DELETE FROM tanques_combustible WHERE id_tanque = $1 RETURNING *', [id]);
@@ -102,17 +114,27 @@ router.delete('/:id', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])],
         res.status(500).json({ message: 'Error al eliminar el tanque' });
     }
 });
+
+// --- POST /recargar/:id (Recargar un tanque y registrar en historial) ---
 router.post('/recargar/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'])], async (req, res) => {
     const { id } = req.params;
-    const { litros_a_cargar } = req.body;
-    const id_empleado = req.user.id; // Para un futuro log de auditoría
+    const { litros_a_cargar, fecha_operacion, observaciones } = req.body;
+    const id_empleado = req.user.id;
 
     if (!litros_a_cargar || isNaN(litros_a_cargar) || litros_a_cargar <= 0) {
         return res.status(400).json({ message: 'La cantidad de litros a cargar debe ser un número positivo.' });
     }
 
+    if (!fecha_operacion) {
+        return res.status(400).json({ message: 'La fecha de operación es requerida.' });
+    }
+
+    const client = await pool.connect();
     try {
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        // 1. Actualizar nivel del tanque
+        const updateResult = await client.query(
             `UPDATE tanques_combustible 
              SET nivel_actual_litros = nivel_actual_litros + $1 
              WHERE id_tanque = $2 
@@ -120,18 +142,28 @@ router.post('/recargar/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', '
             [litros_a_cargar, id]
         );
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ message: 'Tanque no encontrado.' });
+        if (updateResult.rows.length === 0) {
+            throw new Error('Tanque no encontrado.');
         }
-        
-        // Opcional: Aquí podrías insertar un registro en una tabla de 'log_recargas' para auditoría.
 
-        res.status(200).json(result.rows[0]);
+        // 2. Registrar en historial
+        await client.query(
+            `INSERT INTO historial_recargas 
+             (id_tanque, litros_cargados, fecha_operacion, id_empleado, observaciones)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, litros_a_cargar, fecha_operacion, id_empleado, observaciones || null]
+        );
+
+        await client.query('COMMIT');
+        res.status(200).json(updateResult.rows[0]);
+
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Error al recargar el tanque:', error);
-        res.status(500).json({ message: 'Error al recargar el tanque' });
+        res.status(500).json({ message: error.message || 'Error al recargar el tanque' });
+    } finally {
+        client.release();
     }
 });
-
 
 module.exports = router;
