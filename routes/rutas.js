@@ -17,7 +17,7 @@ router.get('/lista-simple', verifyToken, async (req, res) => {
 
 // GET /api/rutas - Obtener todas las rutas (con paginación y búsqueda simple)
 router.get('/', verifyToken, async (req, res) => {
-    const { page = 1, limit = 15, search = '' } = req.query;
+    const { page = 1, limit = 20, search = '' } = req.query;
     try {
         const params = [];
         let whereClause = '';
