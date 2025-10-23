@@ -23,22 +23,20 @@ router.get('/', verifyToken, async (req, res) => {
             whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
         }
 
-        // CAMBIO: El filtro de ruta depende del tipo_calculo
+        // El filtro de ruta depende del tipo_calculo
         if (id_ruta && id_ruta !== '') {
             params.push(parseInt(id_ruta));
             
             if (tipo_calculo === 'vueltas') {
-                // Para vueltas: usar la tabla de relación cargas_combustible_rutas
                 whereClauses.push(`cc.id_carga IN (
                     SELECT DISTINCT id_carga FROM cargas_combustible_rutas WHERE id_ruta = $${params.length}
                 )`);
             } else if (tipo_calculo === 'dias') {
-                // Para días: filtrar por id_ruta_principal
                 whereClauses.push(`cc.id_ruta_principal = $${params.length}`);
             }
         }
 
-        // NUEVO: Filtrar por tipo_calculo en ambos casos
+        // Filtrar por tipo_calculo
         params.push(tipo_calculo);
         whereClauses.push(`cc.tipo_calculo = $${params.length}`);
 
@@ -58,16 +56,14 @@ router.get('/', verifyToken, async (req, res) => {
         // --- Consulta Principal de Datos ---
         const offset = (page - 1) * limit;
         
-        // CAMBIO: Condicionar el SELECT de rutas según tipo_calculo
+        // Condicionar el SELECT de rutas según tipo_calculo
         let selectRutas = '';
         if (tipo_calculo === 'vueltas') {
-            // Para vueltas: mostrar todas las rutas con sus vueltas
             selectRutas = `(SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
                  FROM cargas_combustible_rutas ccr
                  JOIN rutas r ON ccr.id_ruta = r.id_ruta
                  WHERE ccr.id_carga = cc.id_carga) as rutas_y_vueltas`;
         } else if (tipo_calculo === 'dias') {
-            // Para días: mostrar solo la ruta principal con el número de días
             selectRutas = `COALESCE(
                 (SELECT r.nombre_ruta FROM rutas r WHERE r.id_ruta = cc.id_ruta_principal),
                 'Sin especificar'
@@ -78,13 +74,43 @@ router.get('/', verifyToken, async (req, res) => {
             SELECT 
                 cc.*,
                 a.economico,
+                a.modelo,
+                a.marca,
                 o.nombre_completo as nombre_operador,
                 d.nombre as nombre_despachador,
-                ${selectRutas}
+                ${selectRutas},
+                
+                -- NUEVO: Umbrales de referencia y clasificación
+                rr.rendimiento_excelente,
+                rr.rendimiento_bueno,
+                rr.rendimiento_regular,
+                CASE 
+                    WHEN cc.rendimiento_calculado >= rr.rendimiento_excelente THEN 'Excelente'
+                    WHEN cc.rendimiento_calculado >= rr.rendimiento_bueno THEN 'Bueno'
+                    WHEN cc.rendimiento_calculado >= rr.rendimiento_regular THEN 'Regular'
+                    WHEN rr.rendimiento_regular IS NOT NULL THEN 'Malo'
+                    ELSE NULL
+                END as clasificacion_rendimiento
+                
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
             LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
+            
+            -- NUEVO: JOIN con rendimientos_referencia
+            LEFT JOIN rendimientos_referencia rr 
+                ON TRIM(UPPER(rr.modelo_autobus)) = TRIM(UPPER(a.modelo))
+                AND rr.activo = TRUE
+                AND (
+                    (cc.tipo_calculo = 'vueltas' AND rr.id_ruta IN (
+                        SELECT DISTINCT id_ruta FROM cargas_combustible_rutas 
+                        WHERE id_carga = cc.id_carga
+                        LIMIT 1
+                    ))
+                    OR 
+                    (cc.tipo_calculo = 'dias' AND rr.id_ruta = cc.id_ruta_principal)
+                )
+            
             ${whereString}
             ORDER BY cc.fecha_operacion DESC 
             LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -110,9 +136,13 @@ router.get('/', verifyToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error al obtener historial de cargas:', error);
-        res.status(500).json({ message: 'Error al obtener el historial' });
+        res.status(500).json({ 
+            message: 'Error al obtener el historial',
+            error: error.message 
+        });
     }
 });
+
 router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     // CAMBIO: Se reciben los nuevos campos para el cálculo dual
     const {
@@ -218,7 +248,5 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
     }
 });
 
-// (Aquí puedes añadir tus otros endpoints para el historial de cargas, etc.)
-// router.get('/', ...);
 
 module.exports = router;
