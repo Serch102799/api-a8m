@@ -47,7 +47,7 @@ router.get('/usuario/:nombreUsuario', verifyToken, async (req, res) => {
 // 🔓 Crear nuevo empleado (NO requiere token)
 router.post('/', [
     verifyToken, 
-    checkRole(['Admin']),
+    checkRole(['Admin', 'SuperUsuario']),
     // CAMBIO: La validación ahora espera la contraseña en texto plano y el ID del rol.
     body('Nombre').notEmpty().withMessage('El nombre es requerido'),
     body('Nombre_Usuario').notEmpty().withMessage('El nombre de usuario es requerido'),
@@ -103,7 +103,7 @@ router.post('/', [
 });
 
 // 🔒 Actualizar estado de cuenta (requiere Admin)
-router.put('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin']), async (req, res) => {
+router.put('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin', 'SuperUsuario']), async (req, res) => {
   const { nombreUsuario } = req.params;
   const { Estado_Cuenta } = req.body;
 
@@ -128,7 +128,7 @@ router.put('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin']), async (
 });
 
 // 🔒 Desactivar empleado (requiere Admin)
-router.delete('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin']), async (req, res) => {
+router.delete('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin', 'SuperUsuario']), async (req, res) => {
   const { nombreUsuario } = req.params;
 
   try {

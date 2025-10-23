@@ -14,7 +14,14 @@ const validateAutobus = [
  *   name: Autobuses
  *   description: Gestión de autobuses
  */
-
+router.get('/modelos', verifyToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT DISTINCT modelo FROM autobus WHERE modelo IS NOT NULL ORDER BY modelo');
+        res.json(result.rows.map(row => row.modelo));
+    } catch (error) {
+        res.status(500).json({ message: 'Error al obtener modelos de autobús' });
+    }
+});
 /**
  * @swagger
  * /api/autobuses:
@@ -318,7 +325,7 @@ router.get('/:economico', async (req, res) => {
  *       500:
  *         description: Error interno al crear el autobús.
  */
-router.post('/', [verifyToken, checkRole(['Admin'])], validateAutobus, async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin','SuperUsuario'])], validateAutobus, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errores: errors.array() });
@@ -604,6 +611,7 @@ router.post('/:id/sync-km-carga', [verifyToken, checkRole(['Admin', 'SuperUsuari
         res.status(500).json({ message: 'Error en el servidor.' });
     }
 });
+
 
 
 
