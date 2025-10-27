@@ -17,7 +17,7 @@ router.get('/buscar', verifyToken, async (req, res) => {
         const result = await pool.query(
             `SELECT id_operador, nombre_completo 
              FROM operadores 
-             WHERE nombre_completo ILIKE $1
+             WHERE nombre_completo ILIKE $1 AND esta_activo = true
              ORDER BY nombre_completo ASC LIMIT 10`,
             [searchTerm]
         );
@@ -91,18 +91,35 @@ router.get('/buscar', verifyToken, async (req, res) => {
  *         description: Error interno del servidor
  */
 router.get('/', verifyToken, async (req, res) => {
-    const { page = 1, limit = 10, search = '' } = req.query;
+    // Agregamos 'estado' con valor por defecto 'activos'
+    const { page = 1, limit = 10, search = '', estado = 'activos' } = req.query;
+    
     try {
         const params = [];
-        let whereClause = '';
+        const whereConditions = []; // Usamos un array para construir la consulta
+
+        // 1. Filtro de Búsqueda
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClause = `WHERE nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE $${params.length} OR nss ILIKE $${params.length}`;
+            whereConditions.push(`(nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE $${params.length} OR nss ILIKE $${params.length})`);
         }
+
+        // 2. Filtro de Estado (¡NUEVO!)
+        if (estado === 'activos') {
+            whereConditions.push('esta_activo = true');
+        } else if (estado === 'inactivos') {
+            whereConditions.push('esta_activo = false');
+        }
+        // Si estado es 'todos', no agregamos ninguna condición de estado
+
+        // Construimos el WHERE clause
+        const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
         
+        // Query de conteo total
         const totalResult = await pool.query(`SELECT COUNT(*) FROM operadores ${whereClause}`, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
+        // Query de datos paginados
         const offset = (page - 1) * limit;
         const dataQuery = `
             SELECT 
@@ -117,9 +134,12 @@ router.get('/', verifyToken, async (req, res) => {
                 estatus_nss,
                 fecha_nacimiento,
                 fecha_ingreso,
-                -- Cálculo de la edad en años
+                -- Nuevos campos de estado
+                esta_activo,
+                fecha_baja,
+                motivo_baja,
+                -- Cálculos
                 EXTRACT(YEAR FROM AGE(CURRENT_DATE, fecha_nacimiento)) AS edad,
-                -- Cálculo de la antigüedad en años
                 EXTRACT(YEAR FROM AGE(CURRENT_DATE, fecha_ingreso)) AS antiguedad_anios
             FROM operadores
             ${whereClause}
@@ -184,7 +204,7 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
         );
         res.status(201).json(result.rows[0]);
     } catch (error) {
-        if (error.code === '23505') { // Error de valor duplicado
+        if (error.code === '23505') {
             return res.status(400).json({ message: 'El número de licencia, de empleado o NSS ya existe.' });
         }
         console.error('Error al crear el operador:', error);
@@ -256,9 +276,10 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
  */
 router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
+    // Quitamos 'estatus' del body, ya no se gestiona aquí
     const { 
         nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
-        numero_empleado, estatus, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
+        numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
     } = req.body;
     
     if (!nombre_completo) {
@@ -266,15 +287,16 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
     }
 
     try {
+        // Actualizamos la consulta y los parámetros para quitar 'estatus'
         const result = await pool.query(
             `UPDATE operadores SET
                 nombre_completo = $1, numero_licencia = $2, tipo_licencia = $3, 
-                licencia_vencimiento = $4, numero_empleado = $5, estatus = $6,
-                fecha_nacimiento = $7, fecha_ingreso = $8, nss = $9, estatus_nss = $10
-             WHERE id_operador = $11 RETURNING *`,
+                licencia_vencimiento = $4, numero_empleado = $5,
+                fecha_nacimiento = $6, fecha_ingreso = $7, nss = $8, estatus_nss = $9
+             WHERE id_operador = $10 RETURNING *`,
             [
                 nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento,
-                numero_empleado, estatus, fecha_nacimiento, fecha_ingreso, nss, estatus_nss,
+                numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss,
                 id
             ]
         );
@@ -313,20 +335,49 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
  *       500:
  *         description: Error interno del servidor
  */
-router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.patch('/:id/desactivar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
+    const { fecha_baja, motivo_baja } = req.body;
+
+    if (!fecha_baja || !motivo_baja) {
+        return res.status(400).json({ message: 'La fecha y el motivo de la baja son requeridos.' });
+    }
+
     try {
         const result = await pool.query(
-            "UPDATE operadores SET estatus = 'Inactivo' WHERE id_operador = $1 RETURNING *",
-            [id]
+            `UPDATE operadores 
+             SET esta_activo = false, fecha_baja = $1, motivo_baja = $2 
+             WHERE id_operador = $3 RETURNING *`,
+            [fecha_baja, motivo_baja, id]
         );
+
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Operador no encontrado.' });
         }
-        res.json({ message: 'Operador desactivado exitosamente.' });
+        res.json({ message: 'Operador desactivado exitosamente.', operador: result.rows[0] });
     } catch (error) {
         console.error('Error al desactivar el operador:', error);
         res.status(500).json({ message: 'Error al desactivar el operador' });
+    }
+});
+router.patch('/:id/reactivar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const result = await pool.query(
+            `UPDATE operadores 
+             SET esta_activo = true, fecha_baja = NULL, motivo_baja = NULL 
+             WHERE id_operador = $1 RETURNING *`,
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Operador no encontrado.' });
+        }
+        res.json({ message: 'Operador reactivado exitosamente.', operador: result.rows[0] });
+    } catch (error) {
+        console.error('Error al reactivar el operador:', error);
+        res.status(500).json({ message: 'Error al reactivar el operador' });
     }
 });
 

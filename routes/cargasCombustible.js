@@ -9,34 +9,50 @@ router.get('/', verifyToken, async (req, res) => {
         page = 1,
         limit = 10,
         search = '',
-        id_ruta = '',
-        tipo_calculo = 'vueltas'
+        id_rutas = '',           // NUEVO: Múltiples rutas separadas por coma
+        fecha_desde = '',        // NUEVO: Filtro fecha desde
+        fecha_hasta = '',        // NUEVO: Filtro fecha hasta
+        tipo_calculo = 'vueltas',
     } = req.query;
 
     try {
         const params = [];
         let whereClauses = [];
 
-        // --- Construcción de Filtros ---
+        // --- FILTRO: Búsqueda por económico u operador ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
             whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
         }
 
-        // El filtro de ruta depende del tipo_calculo
-        if (id_ruta && id_ruta !== '') {
-            params.push(parseInt(id_ruta));
+        // --- FILTRO: Múltiples Rutas (solo en modo vueltas) ---
+        if (id_rutas && id_rutas !== '' && tipo_calculo === 'vueltas') {
+            const rutasArray = id_rutas.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
             
-            if (tipo_calculo === 'vueltas') {
+            if (rutasArray.length > 0) {
+                // Usar ANY en PostgreSQL para arrays
+                params.push(rutasArray);
                 whereClauses.push(`cc.id_carga IN (
-                    SELECT DISTINCT id_carga FROM cargas_combustible_rutas WHERE id_ruta = $${params.length}
+                    SELECT DISTINCT id_carga 
+                    FROM cargas_combustible_rutas 
+                    WHERE id_ruta = ANY($${params.length}::int[])
                 )`);
-            } else if (tipo_calculo === 'dias') {
-                whereClauses.push(`cc.id_ruta_principal = $${params.length}`);
             }
         }
 
-        // Filtrar por tipo_calculo
+        // --- FILTRO: Fecha Desde ---
+        if (fecha_desde && fecha_desde !== '') {
+            params.push(fecha_desde);
+            whereClauses.push(`cc.fecha_operacion >= $${params.length}::timestamp`);
+        }
+
+        // --- FILTRO: Fecha Hasta (incluir todo el día) ---
+        if (fecha_hasta && fecha_hasta !== '') {
+            params.push(fecha_hasta + ' 23:59:59');
+            whereClauses.push(`cc.fecha_operacion <= $${params.length}::timestamp`);
+        }
+
+        // --- FILTRO: Tipo de Cálculo ---
         params.push(tipo_calculo);
         whereClauses.push(`cc.tipo_calculo = $${params.length}`);
 
@@ -44,7 +60,7 @@ router.get('/', verifyToken, async (req, res) => {
 
         // --- Consulta de Conteo Total ---
         const totalQuery = `
-            SELECT COUNT(*) 
+            SELECT COUNT(DISTINCT cc.id_carga) as count
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
@@ -59,10 +75,12 @@ router.get('/', verifyToken, async (req, res) => {
         // Condicionar el SELECT de rutas según tipo_calculo
         let selectRutas = '';
         if (tipo_calculo === 'vueltas') {
-            selectRutas = `(SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
-                 FROM cargas_combustible_rutas ccr
-                 JOIN rutas r ON ccr.id_ruta = r.id_ruta
-                 WHERE ccr.id_carga = cc.id_carga) as rutas_y_vueltas`;
+            selectRutas = `(
+                SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
+                FROM cargas_combustible_rutas ccr
+                JOIN rutas r ON ccr.id_ruta = r.id_ruta
+                WHERE ccr.id_carga = cc.id_carga
+            ) as rutas_y_vueltas`;
         } else if (tipo_calculo === 'dias') {
             selectRutas = `COALESCE(
                 (SELECT r.nombre_ruta FROM rutas r WHERE r.id_ruta = cc.id_ruta_principal),
@@ -80,7 +98,7 @@ router.get('/', verifyToken, async (req, res) => {
                 d.nombre as nombre_despachador,
                 ${selectRutas},
                 
-                -- NUEVO: Umbrales de referencia y clasificación
+                -- Umbrales de referencia y clasificación
                 rr.rendimiento_excelente,
                 rr.rendimiento_bueno,
                 rr.rendimiento_regular,
@@ -97,7 +115,7 @@ router.get('/', verifyToken, async (req, res) => {
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
             LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
             
-            -- NUEVO: JOIN con rendimientos_referencia
+            -- JOIN con rendimientos_referencia
             LEFT JOIN rendimientos_referencia rr 
                 ON TRIM(UPPER(rr.modelo_autobus)) = TRIM(UPPER(a.modelo))
                 AND rr.activo = TRUE

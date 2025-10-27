@@ -415,41 +415,49 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
     res.status(500).json({ message: 'Error al actualizar la refacción' });
   }
 });
-
 /**
  * @swagger
- * /api/refacciones/nombre/{nombre}:
+ * /api/refacciones/{id}:
  *   delete:
- *     summary: Eliminar una refacción por nombre
+ *     summary: Eliminar una refacción por ID
  *     tags: [Refacciones]
+ *     security:
+ *       - bearerAuth: []   # Token JWT requerido
  *     parameters:
  *       - in: path
- *         name: nombre
+ *         name: id
  *         required: true
  *         schema:
- *           type: string
+ *           type: integer
+ *         description: ID numérico de la refacción a eliminar
  *     responses:
  *       200:
- *         description: Refacción eliminada
+ *         description: Refacción eliminada correctamente
+ *       404:
+ *         description: Refacción no encontrada
+ *       500:
+ *         description: Error en el servidor
  */
-router.delete('/nombre/:nombre', async (req, res) => {
-  const { nombre } = req.params;
+router.delete('/:id', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario'])], async (req, res) => {
+  const { id } = req.params;
 
   try {
     const result = await pool.query(
-      'DELETE FROM Refaccion WHERE LOWER(Nombre) = LOWER($1) RETURNING *',
-      [nombre]
+      'DELETE FROM refaccion WHERE id_refaccion = $1 RETURNING *',
+      [id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Refacción no encontrada' });
     }
 
-    res.json({ message: 'Refacción eliminada', refaccion: result.rows[0] });
+    res.json({ message: 'Refacción eliminada correctamente', refaccion: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ message: 'Error al eliminar refacción' });
+    console.error('Error al eliminar la refacción:', error);
+    res.status(500).json({ message: 'Error al eliminar la refacción' });
   }
 });
+
 /**
  * @swagger
  * /api/refacciones/buscar:
