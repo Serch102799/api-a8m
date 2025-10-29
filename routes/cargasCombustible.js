@@ -4,14 +4,17 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+// ============================================
+// GET / - Listado con filtros (YA EXISTENTE)
+// ============================================
 router.get('/', verifyToken, async (req, res) => {
     const {
         page = 1,
         limit = 10,
         search = '',
-        id_rutas = '',           // NUEVO: Múltiples rutas separadas por coma
-        fecha_desde = '',        // NUEVO: Filtro fecha desde
-        fecha_hasta = '',        // NUEVO: Filtro fecha hasta
+        id_rutas = '',
+        fecha_desde = '',
+        fecha_hasta = '',
         tipo_calculo = 'vueltas',
     } = req.query;
 
@@ -19,18 +22,14 @@ router.get('/', verifyToken, async (req, res) => {
         const params = [];
         let whereClauses = [];
 
-        // --- FILTRO: Búsqueda por económico u operador ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
             whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
         }
 
-        // --- FILTRO: Múltiples Rutas (solo en modo vueltas) ---
         if (id_rutas && id_rutas !== '' && tipo_calculo === 'vueltas') {
             const rutasArray = id_rutas.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-            
             if (rutasArray.length > 0) {
-                // Usar ANY en PostgreSQL para arrays
                 params.push(rutasArray);
                 whereClauses.push(`cc.id_carga IN (
                     SELECT DISTINCT id_carga 
@@ -40,25 +39,21 @@ router.get('/', verifyToken, async (req, res) => {
             }
         }
 
-        // --- FILTRO: Fecha Desde ---
         if (fecha_desde && fecha_desde !== '') {
             params.push(fecha_desde);
             whereClauses.push(`cc.fecha_operacion >= $${params.length}::timestamp`);
         }
 
-        // --- FILTRO: Fecha Hasta (incluir todo el día) ---
         if (fecha_hasta && fecha_hasta !== '') {
             params.push(fecha_hasta + ' 23:59:59');
             whereClauses.push(`cc.fecha_operacion <= $${params.length}::timestamp`);
         }
 
-        // --- FILTRO: Tipo de Cálculo ---
         params.push(tipo_calculo);
         whereClauses.push(`cc.tipo_calculo = $${params.length}`);
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        // --- Consulta de Conteo Total ---
         const totalQuery = `
             SELECT COUNT(DISTINCT cc.id_carga) as count
             FROM cargas_combustible cc
@@ -69,10 +64,8 @@ router.get('/', verifyToken, async (req, res) => {
         const totalResult = await pool.query(totalQuery, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
-        // --- Consulta Principal de Datos ---
         const offset = (page - 1) * limit;
         
-        // Condicionar el SELECT de rutas según tipo_calculo
         let selectRutas = '';
         if (tipo_calculo === 'vueltas') {
             selectRutas = `(
@@ -97,8 +90,6 @@ router.get('/', verifyToken, async (req, res) => {
                 o.nombre_completo as nombre_operador,
                 d.nombre as nombre_despachador,
                 ${selectRutas},
-                
-                -- Umbrales de referencia y clasificación
                 rr.rendimiento_excelente,
                 rr.rendimiento_bueno,
                 rr.rendimiento_regular,
@@ -109,13 +100,10 @@ router.get('/', verifyToken, async (req, res) => {
                     WHEN rr.rendimiento_regular IS NOT NULL THEN 'Malo'
                     ELSE NULL
                 END as clasificacion_rendimiento
-                
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
             LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
-            
-            -- JOIN con rendimientos_referencia
             LEFT JOIN rendimientos_referencia rr 
                 ON TRIM(UPPER(rr.modelo_autobus)) = TRIM(UPPER(a.modelo))
                 AND rr.activo = TRUE
@@ -128,7 +116,6 @@ router.get('/', verifyToken, async (req, res) => {
                     OR 
                     (cc.tipo_calculo = 'dias' AND rr.id_ruta = cc.id_ruta_principal)
                 )
-            
             ${whereString}
             ORDER BY cc.fecha_operacion DESC 
             LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -136,7 +123,6 @@ router.get('/', verifyToken, async (req, res) => {
 
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
-        // Agregar campo adicional para modo días (días_laborados)
         const dataWithDays = dataResult.rows.map(row => {
             if (tipo_calculo === 'dias') {
                 return {
@@ -161,15 +147,470 @@ router.get('/', verifyToken, async (req, res) => {
     }
 });
 
+// ============================================
+// GET /detalle/:id - DEBE ESTAR ANTES DEL PUT
+// ============================================
+router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
+    const { id } = req.params;
+
+    console.log('============================================');
+    console.log('📥 GET /detalle/:id - Iniciando...');
+    console.log('ID recibido:', id);
+    console.log('Usuario:', req.user?.nombre || 'No identificado');
+    console.log('============================================');
+
+    try {
+        // Query para PostgreSQL
+        const query = `
+            SELECT 
+                cc.id_carga,
+                cc.fecha_operacion,
+                cc.km_inicial,
+                cc.km_final,
+                cc.km_recorridos,
+                cc.litros_cargados,
+                cc.rendimiento_calculado,
+                cc.tipo_calculo,
+                cc.id_ruta_principal,
+                cc.dias_laborados,
+                cc.id_autobus,
+                cc.id_empleado_operador,
+                a.economico,
+                o.nombre_completo as nombre_operador
+            FROM cargas_combustible cc
+            LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
+            LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
+            WHERE cc.id_carga = $1
+        `;
+
+        console.log('📝 Ejecutando query con ID:', id);
+        const result = await pool.query(query, [id]);
+        console.log('✅ Query ejecutada. Registros encontrados:', result.rows.length);
+
+        if (result.rows.length === 0) {
+            console.log('⚠️ No se encontró la carga');
+            return res.status(404).json({ 
+                error: 'Carga no encontrada',
+                message: `No se encontró una carga con el ID ${id}` 
+            });
+        }
+
+        const carga = result.rows[0];
+        console.log('✅ Datos obtenidos:', {
+            id_carga: carga.id_carga,
+            economico: carga.economico,
+            km_inicial: carga.km_inicial,
+            km_final: carga.km_final,
+            tipo_calculo: carga.tipo_calculo
+        });
+
+        // Si es tipo 'vueltas', necesitamos obtener las rutas
+        if (carga.tipo_calculo === 'vueltas') {
+            const rutasQuery = `
+                SELECT ccr.id_ruta, ccr.numero_vueltas, r.nombre_ruta
+                FROM cargas_combustible_rutas ccr
+                JOIN rutas r ON ccr.id_ruta = r.id_ruta
+                WHERE ccr.id_carga = $1
+            `;
+            const rutasResult = await pool.query(rutasQuery, [id]);
+            carga.rutas_realizadas = rutasResult.rows;
+            console.log('✅ Rutas obtenidas:', rutasResult.rows.length);
+        }
+
+        res.json(carga);
+        console.log('✅ Respuesta enviada exitosamente');
+
+    } catch (error) {
+        console.error('❌ ERROR en /detalle/:id');
+        console.error('Tipo:', error.constructor.name);
+        console.error('Mensaje:', error.message);
+        console.error('Stack:', error.stack);
+        
+        res.status(500).json({ 
+            error: 'Error en el servidor',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// ============================================
+// PUT /:id - Actualizar carga
+// ============================================
+router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
+    const { id } = req.params;
+    const { 
+        fecha_operacion, 
+        km_inicial, 
+        km_final, 
+        litros_cargados, 
+        tipo_calculo,
+        id_ruta_principal,
+        dias_laborados,
+        rutas_realizadas
+    } = req.body;
+
+    console.log('============================================');
+    console.log('📝 PUT /:id - Iniciando actualización con ajuste de tanque...');
+    console.log('ID:', id);
+    console.log('Datos recibidos:', {
+        fecha_operacion,
+        km_inicial,
+        km_final,
+        litros_cargados,
+        tipo_calculo
+    });
+    console.log('============================================');
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+        console.log('✅ Transacción iniciada');
+
+        // ========== VALIDACIONES ==========
+        console.log('🔍 Validando datos...');
+        
+        if (!fecha_operacion || km_inicial === undefined || km_final === undefined || litros_cargados === undefined) {
+            console.log('❌ Datos incompletos');
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                error: 'Datos incompletos',
+                message: 'Se requieren: fecha_operacion, km_inicial, km_final, litros_cargados' 
+            });
+        }
+
+        const kmInicialNum = parseFloat(km_inicial);
+        const kmFinalNum = parseFloat(km_final);
+        const litrosNum = parseFloat(litros_cargados);
+
+        if (isNaN(kmInicialNum) || isNaN(kmFinalNum) || isNaN(litrosNum)) {
+            console.log('❌ Valores no numéricos');
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                error: 'Datos inválidos',
+                message: 'Los valores numéricos no son válidos' 
+            });
+        }
+
+        if (kmFinalNum <= kmInicialNum) {
+            console.log('❌ KM Final debe ser mayor a KM Inicial');
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                error: 'Kilometraje inválido',
+                message: 'El kilometraje final debe ser mayor al kilometraje inicial' 
+            });
+        }
+
+        if (litrosNum <= 0) {
+            console.log('❌ Litros debe ser mayor a 0');
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                error: 'Litros inválidos',
+                message: 'Los litros cargados deben ser mayor a 0' 
+            });
+        }
+
+        console.log('✅ Validaciones pasadas');
+
+        // ========== OBTENER DATOS ORIGINALES DE LA CARGA ==========
+        console.log('🔍 Obteniendo datos originales de la carga...');
+        const cargaOriginalResult = await client.query(
+            `SELECT 
+                id_autobus, 
+                id_empleado_operador, 
+                tipo_calculo,
+                litros_cargados as litros_originales,
+                id_tanque
+            FROM cargas_combustible 
+            WHERE id_carga = $1`,
+            [id]
+        );
+
+        if (cargaOriginalResult.rows.length === 0) {
+            console.log('❌ Carga no encontrada');
+            await client.query('ROLLBACK');
+            return res.status(404).json({ 
+                error: 'Carga no encontrada',
+                message: `No se encontró una carga con el ID ${id}` 
+            });
+        }
+
+        const cargaOriginal = cargaOriginalResult.rows[0];
+        const { id_autobus, id_empleado_operador, litros_originales, id_tanque } = cargaOriginal;
+        
+        console.log('✅ Carga encontrada:', {
+            id_autobus,
+            litros_originales,
+            litros_nuevos: litrosNum,
+            id_tanque
+        });
+
+        // ========== CALCULAR DIFERENCIA DE LITROS ==========
+        const diferencia_litros = litrosNum - parseFloat(litros_originales);
+        console.log('📊 Diferencia de litros:', diferencia_litros.toFixed(2));
+
+        // ========== AJUSTAR NIVEL DEL TANQUE ==========
+        if (diferencia_litros !== 0) {
+            console.log('⛽ Ajustando nivel del tanque...');
+            
+            // Verificar que el tanque existe
+            const tanqueResult = await client.query(
+                'SELECT id_tanque, nivel_actual_litros, capacidad_litros FROM tanques_combustible WHERE id_tanque = $1',
+                [id_tanque]
+            );
+
+            if (tanqueResult.rows.length === 0) {
+                console.log('❌ Tanque no encontrado');
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    error: 'Tanque no encontrado',
+                    message: 'No se encontró el tanque asociado a esta carga' 
+                });
+            }
+
+            const tanque = tanqueResult.rows[0];
+            const nivel_actual = parseFloat(tanque.nivel_actual_litros);
+            const capacidad_litros = parseFloat(tanque.capacidad_litros);
+
+            console.log('📊 Estado del tanque:', {
+                id_tanque,
+                nivel_actual,
+                capacidad_litros
+            });
+
+            // Si se reducen los litros (diferencia negativa), devolver al tanque
+            // Si se aumentan los litros (diferencia positiva), tomar del tanque
+            const nuevo_nivel = nivel_actual - diferencia_litros;
+
+            console.log('📊 Cálculo del nuevo nivel:', {
+                nivel_actual,
+                diferencia_litros,
+                nuevo_nivel
+            });
+
+            // Validar que el tanque tenga suficiente combustible si se aumentan litros
+            if (diferencia_litros > 0 && nuevo_nivel < 0) {
+                console.log('❌ Tanque sin suficiente combustible');
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    error: 'Tanque insuficiente',
+                    message: `El tanque solo tiene ${nivel_actual.toFixed(2)} litros disponibles. No se pueden cargar ${diferencia_litros.toFixed(2)} litros adicionales.` 
+                });
+            }
+
+            // Validar que no se exceda la capacidad del tanque al devolver combustible
+            if (diferencia_litros < 0 && nuevo_nivel > capacidad_litros) {
+                console.log('⚠️ ADVERTENCIA: Devolver combustible excedería la capacidad del tanque');
+                console.log(`Capacidad: ${capacidad_litros}L, Nuevo nivel calculado: ${nuevo_nivel}L`);
+                console.log('Se ajustará al máximo de la capacidad');
+                
+                // Ajustar al máximo sin exceder
+                const litros_ajustados = capacidad_litros - nivel_actual;
+                
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    error: 'Capacidad del tanque excedida',
+                    message: `No se pueden devolver ${Math.abs(diferencia_litros).toFixed(2)} litros al tanque. Solo hay espacio para ${litros_ajustados.toFixed(2)} litros adicionales. Capacidad del tanque: ${capacidad_litros}L, Nivel actual: ${nivel_actual.toFixed(2)}L` 
+                });
+            }
+
+            // Actualizar el nivel del tanque
+            await client.query(
+                'UPDATE tanques_combustible SET nivel_actual_litros = $1 WHERE id_tanque = $2',
+                [nuevo_nivel, id_tanque]
+            );
+
+            if (diferencia_litros < 0) {
+                console.log(`✅ Devueltos ${Math.abs(diferencia_litros).toFixed(2)} litros al tanque`);
+                console.log(`Nivel del tanque: ${nivel_actual.toFixed(2)}L → ${nuevo_nivel.toFixed(2)}L`);
+            } else {
+                console.log(`✅ Tomados ${diferencia_litros.toFixed(2)} litros adicionales del tanque`);
+                console.log(`Nivel del tanque: ${nivel_actual.toFixed(2)}L → ${nuevo_nivel.toFixed(2)}L`);
+            }
+        } else {
+            console.log('ℹ️ No hay cambios en los litros, no se ajusta el tanque');
+        }
+
+        // ========== CALCULAR KM ESPERADOS ==========
+        console.log('📊 Calculando km esperados...');
+        let km_esperados = 0;
+
+        if (tipo_calculo === 'dias' && id_ruta_principal && dias_laborados > 0) {
+            const rutaResult = await client.query(
+                'SELECT kilometraje_vuelta, vueltas_diarias_promedio FROM rutas WHERE id_ruta = $1',
+                [id_ruta_principal]
+            );
+            if (rutaResult.rows.length > 0) {
+                const { kilometraje_vuelta, vueltas_diarias_promedio } = rutaResult.rows[0];
+                km_esperados = dias_laborados * vueltas_diarias_promedio * kilometraje_vuelta;
+                console.log('✅ KM esperados (días):', km_esperados);
+            }
+        } else if (tipo_calculo === 'vueltas' && rutas_realizadas && rutas_realizadas.length > 0) {
+            const idsRutas = rutas_realizadas.map(r => r.id_ruta);
+            const rutasResult = await client.query(
+                'SELECT id_ruta, kilometraje_vuelta FROM rutas WHERE id_ruta = ANY($1::int[])',
+                [idsRutas]
+            );
+            for (const rutaDetalle of rutas_realizadas) {
+                const rutaInfo = rutasResult.rows.find(r => r.id_ruta === rutaDetalle.id_ruta);
+                if (rutaInfo) {
+                    km_esperados += rutaInfo.kilometraje_vuelta * rutaDetalle.vueltas;
+                }
+            }
+            console.log('✅ KM esperados (vueltas):', km_esperados);
+        }
+
+        // ========== CALCULAR VALORES DERIVADOS ==========
+        const km_recorridos = kmFinalNum - kmInicialNum;
+        const rendimiento_calculado = km_recorridos / litrosNum;
+        const desviacion_km = km_recorridos - km_esperados;
+
+        console.log('📊 Cálculos realizados:', {
+            km_recorridos,
+            rendimiento_calculado: rendimiento_calculado.toFixed(2),
+            desviacion_km: desviacion_km.toFixed(2)
+        });
+
+        // ========== ACTUALIZAR LA CARGA ==========
+        console.log('💾 Actualizando registro de la carga...');
+        const updateQuery = `
+            UPDATE cargas_combustible 
+            SET 
+                fecha_operacion = $1,
+                km_inicial = $2,
+                km_final = $3,
+                km_recorridos = $4,
+                litros_cargados = $5,
+                rendimiento_calculado = $6,
+                km_esperados = $7,
+                desviacion_km = $8,
+                tipo_calculo = $9,
+                id_ruta_principal = $10,
+                dias_laborados = $11
+            WHERE id_carga = $12
+        `;
+
+        await client.query(updateQuery, [
+            fecha_operacion,
+            kmInicialNum,
+            kmFinalNum,
+            km_recorridos,
+            litrosNum,
+            rendimiento_calculado,
+            km_esperados,
+            desviacion_km,
+            tipo_calculo || 'vueltas',
+            tipo_calculo === 'dias' ? id_ruta_principal : null,
+            tipo_calculo === 'dias' ? dias_laborados : null,
+            id
+        ]);
+
+        console.log('✅ Carga actualizada');
+
+        // ========== ACTUALIZAR RUTAS (si es tipo vueltas) ==========
+        if (tipo_calculo === 'vueltas' && rutas_realizadas) {
+            console.log('🛣️ Actualizando rutas...');
+            await client.query('DELETE FROM cargas_combustible_rutas WHERE id_carga = $1', [id]);
+            
+            for (const rutaDetalle of rutas_realizadas) {
+                await client.query(
+                    'INSERT INTO cargas_combustible_rutas (id_carga, id_ruta, numero_vueltas) VALUES ($1, $2, $3)',
+                    [id, rutaDetalle.id_ruta, rutaDetalle.vueltas]
+                );
+            }
+            console.log('✅ Rutas actualizadas');
+        }
+
+        // ========== REGISTRAR AUDITORÍA (OPCIONAL) ==========
+        console.log('📝 Registrando auditoría...');
+        try {
+            await client.query(
+                `INSERT INTO auditoria_cargas_combustible 
+                (id_carga, id_empleado, accion, litros_anteriores, litros_nuevos, diferencia_litros, fecha_modificacion)
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+                [id, req.user.id, 'EDICION', litros_originales, litrosNum, diferencia_litros]
+            );
+            console.log('✅ Auditoría registrada');
+        } catch (auditError) {
+            // Si la tabla de auditoría no existe, solo lo reportamos pero no fallamos
+            console.log('⚠️ No se pudo registrar auditoría (tabla puede no existir):', auditError.message);
+        }
+
+        await client.query('COMMIT');
+        console.log('✅ Transacción confirmada exitosamente');
+
+        // ========== OBTENER DATOS ACTUALIZADOS ==========
+        console.log('📥 Obteniendo datos actualizados...');
+        const datosActualizados = await pool.query(
+            `SELECT 
+                cc.*,
+                a.economico,
+                o.nombre_completo as nombre_operador,
+                tc.nivel_actual_litros as nivel_tanque_actual
+            FROM cargas_combustible cc
+            LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
+            LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
+            LEFT JOIN tanques_combustible tc ON cc.id_tanque = tc.id_tanque
+            WHERE cc.id_carga = $1`,
+            [id]
+        );
+
+        console.log('✅ Actualización completada exitosamente');
+
+        // Mensaje de respuesta con información del ajuste
+        let mensajeAjuste = '';
+        if (diferencia_litros < 0) {
+            mensajeAjuste = ` Se devolvieron ${Math.abs(diferencia_litros).toFixed(2)} litros al tanque.`;
+        } else if (diferencia_litros > 0) {
+            mensajeAjuste = ` Se tomaron ${diferencia_litros.toFixed(2)} litros adicionales del tanque.`;
+        }
+
+        res.json({
+            message: 'Carga actualizada y recalculada exitosamente.' + mensajeAjuste,
+            data: datosActualizados.rows[0],
+            cambios: {
+                km_recorridos,
+                rendimiento_calculado: rendimiento_calculado.toFixed(2),
+                desviacion_km: desviacion_km.toFixed(2),
+                litros_anteriores: parseFloat(litros_originales).toFixed(2),
+                litros_nuevos: litrosNum.toFixed(2),
+                diferencia_litros: diferencia_litros.toFixed(2),
+                ajuste_tanque: diferencia_litros !== 0
+            }
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        
+        console.error('❌ ERROR en PUT /:id');
+        console.error('Tipo:', error.constructor.name);
+        console.error('Mensaje:', error.message);
+        console.error('Stack:', error.stack);
+        
+        res.status(500).json({ 
+            error: 'Error en el servidor',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    } finally {
+        client.release();
+        console.log('🔌 Conexión liberada');
+    }
+});
+
+
+// ============================================
+// POST / - Registro de nueva carga (YA EXISTENTE)
+// ============================================
 router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
-    // CAMBIO: Se reciben los nuevos campos para el cálculo dual
     const {
         id_autobus, id_empleado_operador, id_ubicacion, fecha_operacion,
         km_final, litros_cargados, motivo_desviacion,
-        tipo_calculo, // 'dias' o 'vueltas'
-        id_ruta_principal, // para el modo 'dias'
-        dias_laborados,    // para el modo 'dias'
-        rutas_realizadas   // para el modo 'vueltas'
+        tipo_calculo,
+        id_ruta_principal,
+        dias_laborados,
+        rutas_realizadas
     } = req.body;
     const id_empleado_despachador = req.user.id;
 
@@ -181,19 +622,16 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
     try {
         await client.query('BEGIN');
 
-        // 1. Obtener datos del autobús (sin cambios)
         const autobusResult = await client.query('SELECT kilometraje_ultima_carga, rendimiento_esperado FROM autobus WHERE id_autobus = $1 FOR UPDATE', [id_autobus]);
         if (autobusResult.rows.length === 0) throw new Error('Autobús no encontrado.');
         const { kilometraje_ultima_carga, rendimiento_esperado } = autobusResult.rows[0];
         const km_inicial = kilometraje_ultima_carga;
         if (km_final < km_inicial) throw new Error('El kilometraje final no puede ser menor que el de la última carga.');
 
-        // 2. Lógica del tanque (sin cambios)
         const tanquesDisponibles = await client.query(`SELECT id_tanque FROM tanques_combustible WHERE id_ubicacion = $1 AND nivel_actual_litros >= $2 ORDER BY nivel_actual_litros DESC LIMIT 1`, [id_ubicacion, litros_cargados]);
         if (tanquesDisponibles.rows.length === 0) throw new Error('No hay tanques con suficiente combustible en la ubicación seleccionada.');
         const id_tanque = tanquesDisponibles.rows[0].id_tanque;
 
-        // 3. CAMBIO: Calcular KM esperados con la nueva lógica dual
         let km_esperados = 0;
         if (tipo_calculo === 'dias' && id_ruta_principal && dias_laborados > 0) {
             const rutaResult = await client.query('SELECT kilometraje_vuelta, vueltas_diarias_promedio FROM rutas WHERE id_ruta = $1', [id_ruta_principal]);
@@ -212,7 +650,6 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
             }
         }
 
-        // 4. Calcular campos derivados y aplicar reglas de negocio (sin cambios)
         const km_recorridos = km_final - km_inicial;
         const desviacion_km = km_recorridos - km_esperados;
         const rendimiento_calculado = litros_cargados > 0 ? km_recorridos / litros_cargados : 0;
@@ -222,36 +659,31 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
             throw new Error(`La desviación de ${desviacion_km.toFixed(2)} km es muy alta. Se requiere un motivo.`);
         }
 
-        // 5. Insertar el registro de carga con los campos correspondientes
         const cargaResult = await client.query(
             `INSERT INTO cargas_combustible (
-        id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
-        km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
-        km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
-        id_ruta_principal, dias_laborados, tipo_calculo
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id_carga`,
+                id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
+                km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
+                km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
+                id_ruta_principal, dias_laborados, tipo_calculo
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id_carga`,
             [
                 id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
                 km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
                 km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
-                tipo_calculo === 'dias' ? id_ruta_principal : null,  // <-- AQUÍ: null si es 'vueltas'
-                tipo_calculo === 'dias' ? dias_laborados : null,      // <-- AQUÍ: null si es 'vueltas'
+                tipo_calculo === 'dias' ? id_ruta_principal : null,
+                tipo_calculo === 'dias' ? dias_laborados : null,
                 tipo_calculo
             ]
         );
         const nuevaCargaId = cargaResult.rows[0].id_carga;
 
-        // 6. Insertar los detalles de las rutas (solo si el modo es 'vueltas')
         if (tipo_calculo === 'vueltas' && rutas_realizadas) {
             for (const rutaDetalle of rutas_realizadas) {
                 await client.query(`INSERT INTO cargas_combustible_rutas (id_carga, id_ruta, numero_vueltas) VALUES ($1, $2, $3)`, [nuevaCargaId, rutaDetalle.id_ruta, rutaDetalle.vueltas]);
             }
         }
 
-        // 7. Actualizar kilometrajes del autobús (sin cambios)
         await client.query('UPDATE autobus SET kilometraje_actual = $1, kilometraje_ultima_carga = $1 WHERE id_autobus = $2', [km_final, id_autobus]);
-
-        // 8. Actualizar el nivel del tanque (sin cambios)
         await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_tanque = $2', [litros_cargados, id_tanque]);
 
         await client.query('COMMIT');
@@ -265,6 +697,5 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
         client.release();
     }
 });
-
 
 module.exports = router;
