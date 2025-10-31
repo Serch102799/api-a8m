@@ -33,6 +33,7 @@ const produccionRouter = require('./routes/produccion');
 const productosCompuestosRouter = require('./routes/productosCompuestos');
 const rendiminetosRouter = require('./routes/rendimientos');
 const ajusteInventario = require('./routes/ajusteInventario');
+const conteoInventario = require('./routes/conteoInventario');
 
 
 const app = express();
@@ -89,6 +90,7 @@ app.use('/api/produccion', produccionRouter);
 app.use('/api/productos-compuestos', productosCompuestosRouter); 
 app.use('/api/rendimientos', rendiminetosRouter);
 app.use('/api/ajuste-inventario', ajusteInventario);
+app.use('/api/conteo-inventario', conteoInventario);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {

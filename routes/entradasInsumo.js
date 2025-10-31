@@ -156,16 +156,15 @@ router.get('/', verifyToken, async (req, res) => {
  *                   type: string
  *                   example: La petición debe incluir un objeto "maestro" y un arreglo "detalles" con al menos un ítem.
  *       500:
-  description: Error interno al registrar entrada de insumos
-  content:
-    application/json:
-      schema:
-        type: object
-        properties:
-          message:
-            type: string
-            example: "Error al procesar la entrada: El insumo con ID 99 no fue encontrado."
-
+ *         description: Error interno al registrar entrada de insumos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Error al procesar la entrada: El insumo con ID 99 no fue encontrado."
  */
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
     const { maestro, detalles } = req.body;

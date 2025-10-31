@@ -25,7 +25,8 @@ router.get('/', verifyToken, async (req, res) => {
         // Filtro de búsqueda
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(e.nombre_completo ILIKE $${params.length} OR aim.motivo ILIKE $${params.length})`);
+            // CORRECCIÓN: Usa 'e.nombre'
+            whereClauses.push(`(e.nombre ILIKE $${params.length} OR aim.motivo ILIKE $${params.length})`);
         }
 
         // Filtro por tipo de ajuste
@@ -37,41 +38,50 @@ router.get('/', verifyToken, async (req, res) => {
         // Filtro de fecha desde
         if (fecha_desde) {
             params.push(fecha_desde);
-            whereClauses.push(`aim.fecha_creacion >= $${params.length}::timestamp`);
+            // CORRECCIÓN: Usa 'fecha_ajuste'
+            whereClauses.push(`aim.fecha_ajuste >= $${params.length}::timestamp`);
         }
 
         // Filtro de fecha hasta
         if (fecha_hasta) {
             params.push(fecha_hasta + ' 23:59:59');
-            whereClauses.push(`aim.fecha_creacion <= $${params.length}::timestamp`);
+            // CORRECCIÓN: Usa 'fecha_ajuste'
+            whereClauses.push(`aim.fecha_ajuste <= $${params.length}::timestamp`);
         }
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
         // Contar total
         const totalQuery = `
-            SELECT COUNT(*) as count
-            FROM ajuste_inventario_maestro aim
-            LEFT JOIN empleado e ON aim.id_empleado = e.id_empleado
-            ${whereString}
-        `;
+SELECT COUNT(*) as count
+FROM ajuste_inventario_maestro AS aim
+LEFT JOIN empleado AS e ON aim.id_empleado = e.id_empleado
+${whereString}
+`.trim();
+        console.log('🧩 Consulta generada:\n', totalQuery, '\n🧩 Parámetros:', params);
         const totalResult = await pool.query(totalQuery, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
         // Obtener datos paginados
         const offset = (page - 1) * limit;
         const dataQuery = `
-            SELECT 
-                aim.*,
-                e.nombre_completo as nombre_empleado,
-                (SELECT COUNT(*) FROM ajuste_inventario_detalle WHERE id_ajuste = aim.id_ajuste) as total_detalles
-            FROM ajuste_inventario_maestro aim
-            LEFT JOIN empleado e ON aim.id_empleado = e.id_empleado
-            ${whereString}
-            ORDER BY aim.fecha_creacion DESC
-            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-        `;
+SELECT 
+    aim.id_ajuste,
+    aim.id_empleado,
+    aim.fecha_ajuste,
+    aim.fecha_ajuste AS fecha_creacion,
+    aim.tipo_ajuste,
+    aim.motivo,
+    e.nombre AS nombre_empleado,
+    (SELECT COUNT(*) FROM ajuste_inventario_detalle WHERE id_ajuste = aim.id_ajuste) AS total_detalles
+FROM ajuste_inventario_maestro AS aim
+LEFT JOIN empleado AS e ON aim.id_empleado = e.id_empleado
+${whereString}
+ORDER BY aim.fecha_ajuste DESC
+LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+`.trim();
 
+        console.log('🧩 Consulta generada:\n', totalQuery, '\n🧩 Parámetros:', params);
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
         res.json({
@@ -81,9 +91,9 @@ router.get('/', verifyToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error al obtener ajustes:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Error al obtener ajustes',
-            error: error.message 
+            error: error.message
         });
     }
 });
@@ -94,27 +104,28 @@ router.get('/', verifyToken, async (req, res) => {
 router.get('/detalle/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
 
-    console.log('============================================');
-    console.log('📥 GET /detalle/:id - Ajuste Inventario');
-    console.log('ID:', id);
-    console.log('============================================');
-
     try {
         // Obtener datos maestros
         const maestroQuery = `
-            SELECT 
-                aim.*,
-                e.nombre_completo as nombre_empleado
-            FROM ajuste_inventario_maestro aim
-            LEFT JOIN empleado e ON aim.id_empleado = e.id_empleado
-            WHERE aim.id_ajuste = $1
-        `;
+            SELECT 
+                aim.id_ajuste,
+                aim.id_empleado,
+                aim.fecha_ajuste,
+                aim.fecha_ajuste AS fecha_creacion, -- AJUSTE: Alias para el frontend
+                aim.tipo_ajuste,
+                aim.motivo,
+                e.nombre as nombre_empleado -- AJUSTE: Usa e.nombre
+            FROM ajuste_inventario_maestro aim
+            LEFT JOIN empleado e ON aim.id_empleado = e.id_empleado
+            WHERE aim.id_ajuste = $1
+        `;
+        console.log('🧩 Consulta generada:\n', totalQuery, '\n🧩 Parámetros:', params);
         const maestroResult = await pool.query(maestroQuery, [id]);
 
         if (maestroResult.rows.length === 0) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 error: 'Ajuste no encontrado',
-                message: `No se encontró un ajuste con el ID ${id}` 
+                message: `No se encontró un ajuste con el ID ${id}`
             });
         }
 
@@ -122,15 +133,16 @@ router.get('/detalle/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], 
 
         // Obtener detalles
         const detallesQuery = `
-            SELECT 
-                aid.*,
-                COALESCE(r.nombre_refaccion, i.nombre_insumo) as nombre_item
-            FROM ajuste_inventario_detalle aid
-            LEFT JOIN refaccion r ON aid.id_refaccion = r.id_refaccion
-            LEFT JOIN insumo i ON aid.id_insumo = i.id_insumo
-            WHERE aid.id_ajuste = $1
-            ORDER BY aid.id_detalle
-        `;
+            SELECT 
+                aid.*,
+                COALESCE(r.nombre_refaccion, i.nombre_insumo) as nombre_item
+            FROM ajuste_inventario_detalle aid
+            LEFT JOIN refaccion r ON aid.id_refaccion = r.id_refaccion
+            LEFT JOIN insumo i ON aid.id_insumo = i.id_insumo
+            WHERE aid.id_ajuste = $1
+            ORDER BY aid.id_detalle
+        `;
+        console.log('🧩 Consulta generada:\n', totalQuery, '\n🧩 Parámetros:', params);
         const detallesResult = await pool.query(detallesQuery, [id]);
 
         res.json({
@@ -140,18 +152,18 @@ router.get('/detalle/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], 
 
     } catch (error) {
         console.error('Error al obtener detalle del ajuste:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             error: 'Error en el servidor',
-            message: error.message 
+            message: error.message
         });
     }
 });
 
 // ============================================
-// POST / - Crear nuevo ajuste (YA EXISTENTE)
+// POST / - Crear nuevo ajuste
 // ============================================
 router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
-    
+
     const { maestro, detalles } = req.body;
     const { id_empleado, tipo_ajuste, motivo } = maestro;
 
@@ -164,22 +176,19 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
         await client.query('BEGIN');
 
         // 1. Crear el Ajuste Maestro
+        // AJUSTE: Se usa 'fecha_ajuste' de la DB, se quita del insert
         const maestroResult = await client.query(
-            `INSERT INTO ajuste_inventario_maestro (id_empleado, tipo_ajuste, motivo)
-             VALUES ($1, $2, $3) RETURNING id_ajuste`,
+            `INSERT INTO ajuste_inventario_maestro (id_empleado, tipo_ajuste, motivo, fecha_ajuste)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING id_ajuste`,
             [id_empleado, tipo_ajuste, motivo]
         );
         const nuevoAjusteId = maestroResult.rows[0].id_ajuste;
 
         // 2. Procesar cada detalle
+        // AJUSTE: Lógica mejorada para capturar el ID de lote en ENTRADA
         for (const detalle of detalles) {
-            
-            // Insertar detalle
-            await client.query(
-                `INSERT INTO ajuste_inventario_detalle (id_ajuste, id_refaccion, id_insumo, id_lote_refaccion, cantidad, costo_ajuste)
-                 VALUES ($1, $2, $3, $4, $5, $6)`,
-                [nuevoAjusteId, detalle.id_refaccion, detalle.id_insumo, detalle.id_lote, detalle.cantidad, detalle.costo_ajuste]
-            );
+
+            let idLoteParaGuardar = detalle.id_lote || null; // El ID del lote del frontend
 
             // Aplicar lógica de negocio
             if (detalle.id_insumo) {
@@ -191,23 +200,36 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
             } else if (detalle.id_refaccion) {
                 // REFACCIÓN
                 if (tipo_ajuste === 'ENTRADA') {
-                    await client.query(
-                        `INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final)
-                         VALUES ($1, $2, $3)`,
-                        [detalle.id_refaccion, detalle.cantidad, detalle.costo_ajuste]
+                    // AJUSTE: Crear lote y OBTENER su ID
+                    const loteResult = await client.query(
+                        `INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final, costo_unitario_subtotal, monto_iva_unitario)
+                         VALUES ($1, $2, $3, $3, 0) RETURNING id_lote_refaccion`,
+                        [detalle.id_refaccion, detalle.cantidad, detalle.costo_ajuste || 0]
                     );
+                    idLoteParaGuardar = loteResult.rows[0].id_lote_refaccion; // Guardar el ID del nuevo lote
+
                 } else if (tipo_ajuste === 'SALIDA') {
+                    // AJUSTE: Usar 'detalle.id_lote' (del frontend)
                     await client.query(
                         'UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_lote_refaccion = $2',
-                        [Math.abs(detalle.cantidad), detalle.id_lote_refaccion]
+                        [Math.abs(detalle.cantidad), detalle.id_lote]
                     );
                 } else if (tipo_ajuste === 'REVALORIZACION') {
+                    // AJUSTE: Usar 'detalle.id_lote' (del frontend)
                     await client.query(
                         'UPDATE lote_refaccion SET costo_unitario_final = costo_unitario_final + $1 WHERE id_lote_refaccion = $2',
-                        [detalle.costo_ajuste, detalle.id_lote_refaccion]
+                        [detalle.costo_ajuste, detalle.id_lote]
                     );
                 }
             }
+
+            // Insertar detalle
+            // AJUSTE: Se usa 'idLoteParaGuardar' que ahora tiene el ID correcto
+            await client.query(
+                `INSERT INTO ajuste_inventario_detalle (id_ajuste, id_refaccion, id_insumo, id_lote_refaccion, cantidad, costo_ajuste)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [nuevoAjusteId, detalle.id_refaccion, detalle.id_insumo, idLoteParaGuardar, detalle.cantidad, detalle.costo_ajuste]
+            );
         }
 
         await client.query('COMMIT');
@@ -229,11 +251,6 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
     const { id } = req.params;
     const { maestro, detalles } = req.body;
 
-    console.log('============================================');
-    console.log('📝 PUT /:id - Actualizando ajuste...');
-    console.log('ID:', id);
-    console.log('============================================');
-
     const client = await pool.connect();
 
     try {
@@ -241,34 +258,32 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
 
         // 1. Obtener datos originales
         const originalQuery = `
-            SELECT aim.*, 
-                   array_agg(
-                       json_build_object(
-                           'id_detalle', aid.id_detalle,
-                           'id_refaccion', aid.id_refaccion,
-                           'id_insumo', aid.id_insumo,
-                           'id_lote_refaccion', aid.id_lote_refaccion,
-                           'cantidad', aid.cantidad,
-                           'costo_ajuste', aid.costo_ajuste
-                       )
-                   ) as detalles_originales
-            FROM ajuste_inventario_maestro aim
-            LEFT JOIN ajuste_inventario_detalle aid ON aim.id_ajuste = aid.id_ajuste
-            WHERE aim.id_ajuste = $1
-            GROUP BY aim.id_ajuste
-        `;
+            SELECT aim.*, 
+                   array_agg(
+                       json_build_object(
+                           'id_detalle', aid.id_detalle,
+                           'id_refaccion', aid.id_refaccion,
+                           'id_insumo', aid.id_insumo,
+                           'id_lote_refaccion', aid.id_lote_refaccion,
+                           'cantidad', aid.cantidad,
+                           'costo_ajuste', aid.costo_ajuste
+                       )
+                   ) as detalles_originales
+            FROM ajuste_inventario_maestro aim
+            LEFT JOIN ajuste_inventario_detalle aid ON aim.id_ajuste = aid.id_ajuste
+            WHERE aim.id_ajuste = $1
+            GROUP BY aim.id_ajuste
+        `;
         const originalResult = await client.query(originalQuery, [id]);
 
         if (originalResult.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ 
-                error: 'Ajuste no encontrado',
-                message: `No se encontró un ajuste con el ID ${id}` 
+            return res.status(404).json({
+                error: 'Ajuste no encontrado'
             });
         }
 
         const ajusteOriginal = originalResult.rows[0];
-        console.log('Ajuste original obtenido');
 
         // 2. REVERTIR el ajuste original
         console.log('⏪ Revirtiendo ajuste original...');
@@ -276,20 +291,22 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
             if (!detalleOrig.id_detalle) continue; // Skip null entries
 
             if (detalleOrig.id_insumo) {
-                // Revertir insumo (restar la cantidad que se había sumado)
+                // Revertir insumo (restar la cantidad que se había sumado/restado)
                 await client.query(
                     'UPDATE insumo SET stock_actual = stock_actual - $1 WHERE id_insumo = $2',
                     [detalleOrig.cantidad, detalleOrig.id_insumo]
                 );
-                console.log(`Revertido insumo ID ${detalleOrig.id_insumo}: -${detalleOrig.cantidad}`);
             } else if (detalleOrig.id_refaccion) {
                 if (ajusteOriginal.tipo_ajuste === 'ENTRADA') {
-                    // Si fue entrada, eliminar el lote creado
-                    // (Esto es complejo, por simplicidad solo ajustamos el stock)
-                    await client.query(
-                        'UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_refaccion = $2 AND id_lote_refaccion = $3',
-                        [detalleOrig.cantidad, detalleOrig.id_refaccion, detalleOrig.id_lote_refaccion]
-                    );
+                    // AJUSTE: Si fue entrada, ELIMINAR el lote que se creó
+                    // (Asumiendo que el lote no se ha usado, lo cual es un riesgo de negocio
+                    // pero es la única forma de revertir)
+                    if (detalleOrig.id_lote_refaccion) {
+                        await client.query(
+                            'DELETE FROM lote_refaccion WHERE id_lote_refaccion = $1',
+                            [detalleOrig.id_lote_refaccion]
+                        );
+                    }
                 } else if (ajusteOriginal.tipo_ajuste === 'SALIDA') {
                     // Si fue salida, devolver al lote
                     await client.query(
@@ -303,65 +320,64 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
                         [detalleOrig.costo_ajuste, detalleOrig.id_lote_refaccion]
                     );
                 }
-                console.log(`Revertida refacción ID ${detalleOrig.id_refaccion}`);
             }
         }
 
         // 3. Actualizar maestro
-        console.log('💾 Actualizando datos maestros...');
         await client.query(
             `UPDATE ajuste_inventario_maestro 
-             SET id_empleado = $1, tipo_ajuste = $2, motivo = $3
-             WHERE id_ajuste = $4`,
+             SET id_empleado = $1, tipo_ajuste = $2, motivo = $3
+             WHERE id_ajuste = $4`,
             [maestro.id_empleado, maestro.tipo_ajuste, maestro.motivo, id]
         );
 
         // 4. Eliminar detalles antiguos
         await client.query('DELETE FROM ajuste_inventario_detalle WHERE id_ajuste = $1', [id]);
-        console.log('Detalles antiguos eliminados');
 
         // 5. Insertar nuevos detalles y aplicar nuevos ajustes
+        // AJUSTE: Lógica copiada del POST, ahora correcta
         console.log('⏩ Aplicando nuevos ajustes...');
         for (const detalle of detalles) {
-            // Insertar detalle
-            await client.query(
-                `INSERT INTO ajuste_inventario_detalle (id_ajuste, id_refaccion, id_insumo, id_lote_refaccion, cantidad, costo_ajuste)
-                 VALUES ($1, $2, $3, $4, $5, $6)`,
-                [id, detalle.id_refaccion, detalle.id_insumo, detalle.id_lote, detalle.cantidad, detalle.costo_ajuste]
-            );
 
-            // Aplicar lógica de negocio
+            let idLoteParaGuardar = detalle.id_lote || null;
+
             if (detalle.id_insumo) {
                 await client.query(
                     'UPDATE insumo SET stock_actual = stock_actual + $1 WHERE id_insumo = $2',
                     [detalle.cantidad, detalle.id_insumo]
                 );
-                console.log(`Aplicado ajuste a insumo ID ${detalle.id_insumo}: +${detalle.cantidad}`);
             } else if (detalle.id_refaccion) {
                 if (maestro.tipo_ajuste === 'ENTRADA') {
-                    await client.query(
-                        `INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final)
-                         VALUES ($1, $2, $3)`,
+                    const loteResult = await client.query(
+                        `INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final, costo_unitario_subtotal, monto_iva_unitario)
+                         VALUES ($1, $2, $3, $3, 0) RETURNING id_lote_refaccion`,
                         [detalle.id_refaccion, detalle.cantidad, detalle.costo_ajuste || 0]
                     );
+                    idLoteParaGuardar = loteResult.rows[0].id_lote_refaccion;
+
                 } else if (maestro.tipo_ajuste === 'SALIDA') {
                     await client.query(
                         'UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_lote_refaccion = $2',
                         [Math.abs(detalle.cantidad), detalle.id_lote]
                     );
+                    _
                 } else if (maestro.tipo_ajuste === 'REVALORIZACION') {
                     await client.query(
                         'UPDATE lote_refaccion SET costo_unitario_final = costo_unitario_final + $1 WHERE id_lote_refaccion = $2',
                         [detalle.costo_ajuste, detalle.id_lote]
                     );
                 }
-                console.log(`Aplicado ajuste a refacción ID ${detalle.id_refaccion}`);
             }
+
+            // Insertar detalle nuevo
+            await client.query(
+                `INSERT INTO ajuste_inventario_detalle (id_ajuste, id_refaccion, id_insumo, id_lote_refaccion, cantidad, costo_ajuste)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [id, detalle.id_refaccion, detalle.id_insumo, idLoteParaGuardar, detalle.cantidad, detalle.costo_ajuste]
+            );
         }
 
         await client.query('COMMIT');
-        console.log('✅ Ajuste actualizado exitosamente');
-
         res.json({
             message: 'Ajuste actualizado exitosamente. El inventario ha sido recalculado.',
             id_ajuste: id
@@ -370,9 +386,9 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('❌ Error al actualizar ajuste:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             error: 'Error en el servidor',
-            message: error.message 
+            message: error.message
         });
     } finally {
         client.release();

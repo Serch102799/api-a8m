@@ -177,4 +177,5 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
     }
 });
 
+
 module.exports = router;
