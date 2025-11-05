@@ -3,50 +3,8 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
-/**
- * @swagger
- * tags:
- *   - name: Insumos
- *     description: Gestión de insumos y consumibles del taller
- */
 
-/**
- * @swagger
- * /api/insumos:
- *   get:
- *     summary: Obtener todos los insumos
- *     tags: [Insumos]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Lista de insumos
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   id_insumo:
- *                     type: integer
- *                     example: 1
- *                   nombre:
- *                     type: string
- *                     example: "Aceite 15W-40"
- *                   marca:
- *                     type: string
- *                     example: "Castrol"
- *                   tipo:
- *                     type: string
- *                     example: "Lubricante"
- *                   unidad_medida:
- *                     type: string
- *                     example: "Litros"
- *                   stock_minimo:
- *                     type: number
- *                     example: 5
- */
+// GET - Obtener todos los insumos (sin cambios en la lógica, ya devuelve costo_unitario_promedio)
 router.get('/', async (req, res) => {
     const { 
         page = 1, 
@@ -58,7 +16,6 @@ router.get('/', async (req, res) => {
     } = req.query;
 
     try {
-        // --- Construcción de la Consulta ---
         const params = [];
         let whereClauses = [];
 
@@ -74,13 +31,11 @@ router.get('/', async (req, res) => {
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        // --- Consulta de Conteo Total ---
         const totalQuery = `SELECT COUNT(*) FROM insumo ${whereString}`;
         const totalResult = await pool.query(totalQuery, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
-        // --- Consulta de Datos Paginados ---
-        const allowedSortBy = ['nombre', 'marca', 'tipo_insumo', 'stock_actual', 'unidad_medida'];
+        const allowedSortBy = ['nombre', 'marca', 'tipo_insumo', 'stock_actual', 'unidad_medida', 'costo_unitario_promedio'];
         const sortColumn = allowedSortBy.includes(sortBy) ? sortBy : 'nombre';
         const sortDirection = sortOrder.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
 
@@ -93,7 +48,6 @@ router.get('/', async (req, res) => {
         `;
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
-        // --- Envío de Respuesta Estructurada ---
         res.json({
             total: totalItems,
             data: dataResult.rows
@@ -105,67 +59,9 @@ router.get('/', async (req, res) => {
     }
 });
 
-/**
- * @swagger
- * /api/insumos:
- *   post:
- *     summary: Crear un nuevo insumo (Solo Admins)
- *     tags: [Insumos]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - nombre
- *               - unidad_medida
- *             properties:
- *               nombre:
- *                 type: string
- *                 example: "Desengrasante"
- *               marca:
- *                 type: string
- *                 example: "WD-40"
- *               tipo:
- *                 type: string
- *                 example: "Limpiador"
- *               unidad_medida:
- *                 type: string
- *                 example: "Mililitros"
- *     responses:
- *       201:
- *         description: Insumo creado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id_insumo:
- *                   type: integer
- *                   example: 10
- *                 nombre:
- *                   type: string
- *                   example: "Desengrasante"
- *                 marca:
- *                   type: string
- *                   example: "WD-40"
- *                 tipo:
- *                   type: string
- *                   example: "Limpiador"
- *                 unidad_medida:
- *                   type: string
- *                   example: "Mililitros"
- *       400:
- *         description: Error de validación o nombre duplicado
- *       500:
- *         description: Error interno del servidor
- */
+// POST - Crear insumo
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
-  // CAMBIO: Se usan los nombres de propiedad correctos que envía el frontend
-  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo } = req.body;
+  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo, costo_unitario_promedio } = req.body;
   
   if (!nombre || !unidad_medida || !tipo_insumo) {
     return res.status(400).json({ message: 'Nombre, Unidad de Medida y Tipo son requeridos.' });
@@ -173,10 +69,9 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
 
   try {
     const result = await pool.query(
-      // CAMBIO: La consulta ahora usa la columna 'tipo_insumo'
-      `INSERT INTO insumo (nombre, marca, tipo_insumo, unidad_medida, stock_minimo) 
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo]
+      `INSERT INTO insumo (nombre, marca, tipo_insumo, unidad_medida, stock_minimo, costo_unitario_promedio) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo || 0, costo_unitario_promedio || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -188,44 +83,10 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
   }
 });
 
-/**
- * @swagger
- * /api/insumos/{id}:
- *   put:
- *     summary: Actualizar un insumo (Solo Admins)
- *     tags: [Insumos]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *         description: ID del insumo a actualizar
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - stock_minimo
- *             properties:
- *               stock_minimo:
- *                 type: number
- *                 example: 15
- *     responses:
- *       200:
- *         description: Insumo actualizado exitosamente
- *       404:
- *         description: Insumo no encontrado
- *       500:
- *         description: Error al actualizar el insumo
- */
+// PUT - Actualizar insumo completo
 router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
   const { id } = req.params;
-  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo } = req.body;
+  const { nombre, marca, tipo_insumo, unidad_medida, stock_minimo, costo_unitario_promedio } = req.body;
 
   if (!nombre || !unidad_medida || !tipo_insumo) {
     return res.status(400).json({ message: 'Nombre, Unidad de Medida y Tipo son requeridos.' });
@@ -234,9 +95,10 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
   try {
     const result = await pool.query(
       `UPDATE insumo 
-       SET nombre = $1, marca = $2, tipo_insumo = $3, unidad_medida = $4, stock_minimo = $5 
-       WHERE id_insumo = $6 RETURNING *`,
-      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo, id]
+       SET nombre = $1, marca = $2, tipo_insumo = $3, unidad_medida = $4, 
+           stock_minimo = $5, costo_unitario_promedio = $6
+       WHERE id_insumo = $7 RETURNING *`,
+      [nombre, marca, tipo_insumo, unidad_medida, stock_minimo || 0, costo_unitario_promedio || 0, id]
     );
 
     if (result.rows.length === 0) {
@@ -251,11 +113,12 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
     res.status(500).json({ message: 'Error al actualizar el insumo' });
   }
 });
+
 /**
  * @swagger
- * /api/insumos/{id}:
- *   delete:
- *     summary: Eliminar un insumo (Solo Admins)
+ * /api/insumos/{id}/costo:
+ *   patch:
+ *     summary: Actualizar solo el costo unitario promedio de un insumo (Solo Admin)
  *     tags: [Insumos]
  *     security:
  *       - bearerAuth: []
@@ -265,15 +128,65 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
  *         required: true
  *         schema:
  *           type: integer
- *         description: ID del insumo a eliminar
+ *         description: ID del insumo
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - costo_unitario_promedio
+ *             properties:
+ *               costo_unitario_promedio:
+ *                 type: number
+ *                 example: 125.50
  *     responses:
  *       200:
- *         description: Insumo eliminado exitosamente
+ *         description: Costo actualizado exitosamente
+ *       400:
+ *         description: Costo inválido
  *       404:
  *         description: Insumo no encontrado
  *       500:
- *         description: Error al eliminar insumo. Puede estar en uso.
+ *         description: Error al actualizar el costo
  */
+router.patch('/:id/costo', [verifyToken, checkRole(['SuperUsuario'])], async (req, res) => {
+  const { id } = req.params;
+  const { costo_unitario_promedio } = req.body;
+
+  if (costo_unitario_promedio === undefined || costo_unitario_promedio === null) {
+    return res.status(400).json({ message: 'El costo unitario promedio es requerido.' });
+  }
+
+  if (costo_unitario_promedio < 0) {
+    return res.status(400).json({ message: 'El costo no puede ser negativo.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE insumo 
+       SET costo_unitario_promedio = $1 
+       WHERE id_insumo = $2 
+       RETURNING *`,
+      [costo_unitario_promedio, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Insumo no encontrado.' });
+    }
+
+    res.status(200).json({
+      message: 'Costo actualizado exitosamente',
+      insumo: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error al actualizar el costo:', error);
+    res.status(500).json({ message: 'Error al actualizar el costo del insumo' });
+  }
+});
+
+// DELETE - Eliminar insumo
 router.delete('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
     const { id } = req.params;
     try {
@@ -286,8 +199,8 @@ router.delete('/:id', [verifyToken, checkRole(['Admin'])], async (req, res) => {
         res.status(500).json({ message: 'Error al eliminar insumo. Puede que esté en uso en algún registro.' });
     }
 });
-// En routes/insumos.js
 
+// GET - Buscar insumos
 router.get('/buscar', verifyToken, async (req, res) => {
   const { term } = req.query;
 
@@ -298,20 +211,16 @@ router.get('/buscar', verifyToken, async (req, res) => {
   try {
     const searchTerm = `%${term}%`;
     const result = await pool.query(
-      `
-      SELECT 
+      `SELECT 
           id_insumo,
           (nombre || ' - ' || COALESCE(marca, 'S/M')) AS nombre,
           stock_actual,
-          unidad_medida
-      FROM 
-          insumo
-      WHERE 
-          nombre ILIKE $1 OR marca ILIKE $1 OR tipo_insumo::text ILIKE $1
-      ORDER BY 
-          nombre ASC
-      LIMIT 10
-      `,
+          unidad_medida,
+          costo_unitario_promedio
+      FROM insumo
+      WHERE nombre ILIKE $1 OR marca ILIKE $1 OR tipo_insumo::text ILIKE $1
+      ORDER BY nombre ASC
+      LIMIT 10`,
       [searchTerm]
     );
     res.json(result.rows);
@@ -320,6 +229,8 @@ router.get('/buscar', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al buscar insumos' });
   }
 });
+
+// GET - Obtener un insumo por ID
 router.get('/:id', verifyToken, async (req, res) => {
   const { id } = req.params;
   try {
@@ -335,4 +246,5 @@ router.get('/:id', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al obtener el insumo' });
   }
 });
+
 module.exports = router;
