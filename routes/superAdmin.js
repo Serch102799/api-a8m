@@ -4,6 +4,131 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+// -----------------------------------------------------------------
+// 1. OBTENER TODAS LAS SESIONES ACTIVAS (Para el panel de admin)
+// -----------------------------------------------------------------
+router.get(
+  '/sesiones', 
+  [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])],
+  async (req, res) => {
+    try {
+      console.log('GET /admin/sesiones - Solicitado por:', req.user.nombre);
+
+      const query = `
+        SELECT 
+          s.id_sesion,
+          s.fecha_login,
+          s.ip_address,
+          s.user_agent,
+          e.nombre,       -- Nombre del empleado
+          e.puesto
+        FROM 
+          sesiones_activas s
+        JOIN 
+          empleado e ON s.id_usuario = e.id_empleado
+        WHERE 
+          s.estado = 'activo'  -- ¡Solo mostramos los activos!
+        ORDER BY 
+          s.fecha_login DESC;
+      `;
+
+      const result = await pool.query(query);
+
+      res.status(200).json(result.rows);
+      
+    } catch (error) {
+      console.error('Error en GET /admin/sesiones:', error.message);
+      res.status(500).json({ message: 'Error del servidor' });
+    }
+  }
+);
+
+// -----------------------------------------------------------------
+// 2. FORZAR CIERRE DE SESIÓN DE UN USUARIO
+// -----------------------------------------------------------------
+router.post(
+  '/sesiones/cerrar/:id', 
+  [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], // Protegido por Token Y Rol
+  async (req, res) => {
+    const { id: id_sesion } = req.params; // El ID de la *sesión* a cerrar
+    const adminNombre = req.user.nombre; // Quién está realizando la acción
+
+    try {
+      console.log(`POST /admin/sesiones/cerrar/${id_sesion} - Solicitado por: ${adminNombre}`);
+
+      if (!id_sesion || isNaN(parseInt(id_sesion))) {
+        return res.status(400).json({ message: 'ID de sesión no válido' });
+      }
+
+      const query = `
+        UPDATE sesiones_activas
+        SET 
+          estado = 'cerrada_admin', -- ¡Lo marcamos como cerrado!
+          fecha_logout = NOW()
+        WHERE 
+          id_sesion = $1
+          AND estado = 'activo'     -- Solo cerramos sesiones que están activas
+        RETURNING id_sesion, id_usuario;
+      `;
+
+      const result = await pool.query(query, [id_sesion]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'Sesión no encontrada o ya estaba cerrada' });
+      }
+      
+      console.log(`Sesión ${result.rows[0].id_sesion} (Usuario: ${result.rows[0].id_usuario}) cerrada por ${adminNombre}`);
+
+      res.status(200).json({ 
+        message: 'Sesión cerrada exitosamente',
+        sesionCerrada: result.rows[0].id_sesion 
+      });
+
+    } catch (error) {
+      console.error('Error en POST /admin/sesiones/cerrar:', error.message);
+      res.status(500).json({ message: 'Error del servidor' });
+    }
+  }
+);
+router.get(
+  '/auditoria/:id_usuario',
+  [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], // Protegido
+  async (req, res) => {
+    try {
+      const { id_usuario } = req.params;
+      const limite = req.query.limite || 50; // Opcional: limitar a las últimas 50 acciones
+
+      const query = `
+        SELECT 
+          a.timestamp,
+          a.tipo_accion,
+          a.recurso_afectado,
+          a.id_recurso_afectado,
+          a.detalles_cambio,
+          a.ip_address,
+          e.nombre as nombre_usuario -- Obtenemos el nombre para confirmar
+        FROM 
+          auditoria_acciones a
+        JOIN 
+          empleado e ON a.id_usuario = e.id_empleado
+        WHERE 
+          a.id_usuario = $1
+        ORDER BY 
+          a.timestamp DESC -- Mostrar lo más reciente primero
+        LIMIT $2;
+      `;
+
+      const result = await pool.query(query, [id_usuario, limite]);
+
+      res.status(200).json(result.rows);
+
+    } catch (error) {
+      console.error('Error en GET /admin/auditoria:', error.message);
+      res.status(500).json({ message: 'Error del servidor' });
+    }
+  }
+);
+
 /**
  * @swagger
  * tags:

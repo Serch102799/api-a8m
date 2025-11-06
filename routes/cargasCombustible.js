@@ -3,6 +3,7 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
+const { registrarAuditoria } = require('../servicios/auditService');
 
 // ============================================
 // GET / - Listado con filtros (YA EXISTENTE)
@@ -177,6 +178,7 @@ router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista'
                 cc.id_empleado_operador,
                 a.economico,
                 o.nombre_completo as nombre_operador
+                
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
@@ -687,6 +689,14 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
         await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_tanque = $2', [litros_cargados, id_tanque]);
 
         await client.query('COMMIT');
+        registrarAuditoria({
+      id_usuario: req.user.id, // Lo sacamos del token verificado
+      tipo_accion: 'CREAR',
+      recurso_afectado: 'cargas_combustible',
+      id_recurso_afectado: nuevaCarga.id_carga,
+      detalles_cambio: { litros: nuevaCarga.litros_cargados, km: nuevaCarga.km_recorridos },
+      ip_address: req.ip
+    });
         res.status(201).json({ message: 'Carga de combustible registrada exitosamente.' });
 
     } catch (error) {

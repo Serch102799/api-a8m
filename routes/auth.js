@@ -38,25 +38,25 @@ const JWT_SECRET = 'clave_secreta_segura';
  *         description: Error del servidor
  */
 router.post(
-  '/login',
-  [
-    body('Nombre_Usuario').notEmpty().withMessage('Nombre_Usuario es requerido'),
-    body('Contrasena').notEmpty().withMessage('Contrasena es requerida')
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errores: errors.array() });
-    }
+  '/login',
+  [
+    body('Nombre_Usuario').notEmpty().withMessage('Nombre_Usuario es requerido'),
+    body('Contrasena').notEmpty().withMessage('Contrasena es requerida')
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errores: errors.array() });
+    }
 
-    const { Nombre_Usuario, Contrasena } = req.body;
+    const { Nombre_Usuario, Contrasena } = req.body;
 
-    try {
-      // ✅ Consulta actualizada para usar minúsculas consistentes
-     const result = await pool.query(
+    try {
+      // 1. OBTENER AL EMPLEADO
+      const result = await pool.query(
         `SELECT 
            e.id_empleado, e.nombre, e.puesto, e.nombre_usuario, 
-           e.contrasena_hash, -- CAMBIO: Se usa el nombre de columna correcto
+           e.contrasena_hash,
            r.nombre_rol AS rol
          FROM 
            empleado e
@@ -67,45 +67,77 @@ router.post(
         [Nombre_Usuario]
       );
 
-      if (result.rows.length === 0) {
-        return res.status(401).json({ message: 'Usuario no encontrado' });
-      }
+      if (result.rows.length === 0) {
+        return res.status(401).json({ message: 'Usuario no encontrado' });
+      }
 
-      const empleado = result.rows[0];
+      const empleado = result.rows[0];
 
-      const passwordMatch = await bcrypt.compare(Contrasena, empleado.contrasena_hash);
-      if (!passwordMatch) {
-        return res.status(401).json({ message: 'Contraseña incorrecta' });
-      }
+      // 2. VERIFICAR CONTRASEÑA
+      const passwordMatch = await bcrypt.compare(Contrasena, empleado.contrasena_hash);
+      if (!passwordMatch) {
+        return res.status(401).json({ message: 'Contraseña incorrecta' });
+      }
 
-      // ✅ Payload actualizado para incluir el ROL
+      // 3. DEFINIR TIEMPO Y PAYLOAD DEL TOKEN
+      const duracionTokenHoras = 8;
+      const tiempoExpMs = Date.now() + (duracionTokenHoras * 60 * 60 * 1000);
+      const fechaExpiracion = new Date(tiempoExpMs);
+
       const payload = {
         id: empleado.id_empleado,
         nombre: empleado.nombre,
         rol: empleado.rol
       };
-    
-      const token = jwt.sign(
-        payload, // Usamos el payload completo
-        process.env.JWT_SECRET, // ✅ Usamos la clave secreta del archivo .env
-        { expiresIn: '8h' }
-      );
+      
+      // 4. FIRMAR EL TOKEN JWT
+      const token = jwt.sign(
+        payload, 
+        process.env.JWT_SECRET,
+        { expiresIn: `${duracionTokenHoras}h` } // Tu duración de 8h
+      );
 
-      res.status(200).json({
-        message: 'Éxito al iniciar sesión',
-        empleado: {
-          id: empleado.id_empleado,
-          nombre: empleado.nombre,
-          puesto: empleado.puesto,
-          rol: empleado.rol // ✅ Se añade el ROL a la respuesta
-        },
-        token
-      });
-    } catch (error) {
-      console.error('Error al iniciar sesión:', error);
-      res.status(500).json({ message: 'Error del servidor' });
-    }
-  }
+      // --- ¡NUEVO PASO! ---
+      // 5. REGISTRAR LA SESIÓN EN LA BASE DE DATOS
+      const ip = req.ip;
+      const userAgent = req.headers['user-agent'];
+
+      const querySesion = `
+        INSERT INTO sesiones_activas 
+          (id_usuario, token_jwt, user_agent, ip_address, fecha_expiracion_token, estado)
+        VALUES 
+          ($1, $2, $3, $4, $5, 'activo')
+      `;
+      
+      // Ejecutamos el query para guardar la sesión.
+      // No necesitamos 'await' si no queremos que el usuario espere,
+      // pero es más seguro hacerlo con 'await' para asegurar que se guarde.
+      await pool.query(querySesion, [
+        empleado.id_empleado, 
+        token, 
+        userAgent, 
+        ip, 
+        fechaExpiracion
+      ]);
+      // --- FIN DEL NUEVO PASO ---
+
+      // 6. ENVIAR RESPUESTA AL USUARIO
+      res.status(200).json({
+        message: 'Éxito al iniciar sesión',
+        empleado: {
+          id: empleado.id_empleado,
+          nombre: empleado.nombre,
+          puesto: empleado.puesto,
+          rol: empleado.rol 
+        },
+        token
+      });
+
+    } catch (error) {
+      console.error('Error al iniciar sesión:', error);
+      res.status(500).json({ message: 'Error del servidor' });
+    }
+  }
 );
 
 /**
