@@ -667,7 +667,7 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
                 km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
                 km_esperados, desviacion_km, rendimiento_esperado, alerta_kilometraje, motivo_desviacion,
                 id_ruta_principal, dias_laborados, tipo_calculo
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id_carga`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
             [
                 id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
                 km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
@@ -677,13 +677,14 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
                 tipo_calculo
             ]
         );
-        const nuevaCargaId = cargaResult.rows[0].id_carga;
+        const nuevaCarga = cargaResult.rows[0];
 
         if (tipo_calculo === 'vueltas' && rutas_realizadas) {
-            for (const rutaDetalle of rutas_realizadas) {
-                await client.query(`INSERT INTO cargas_combustible_rutas (id_carga, id_ruta, numero_vueltas) VALUES ($1, $2, $3)`, [nuevaCargaId, rutaDetalle.id_ruta, rutaDetalle.vueltas]);
-            }
-        }
+            for (const rutaDetalle of rutas_realizadas) {
+                // CAMBIO 3: Usar la nueva variable
+                await client.query(`INSERT INTO cargas_combustible_rutas (id_carga, id_ruta, numero_vueltas) VALUES ($1, $2, $3)`, [nuevaCarga.id_carga, rutaDetalle.id_ruta, rutaDetalle.vueltas]);
+            }
+        }
 
         await client.query('UPDATE autobus SET kilometraje_actual = $1, kilometraje_ultima_carga = $1 WHERE id_autobus = $2', [km_final, id_autobus]);
         await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_tanque = $2', [litros_cargados, id_tanque]);
