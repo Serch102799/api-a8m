@@ -154,14 +154,8 @@ router.get('/', verifyToken, async (req, res) => {
 router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     const { id } = req.params;
 
-    console.log('============================================');
-    console.log('📥 GET /detalle/:id - Iniciando...');
-    console.log('ID recibido:', id);
-    console.log('Usuario:', req.user?.nombre || 'No identificado');
-    console.log('============================================');
-
     try {
-        // Query para PostgreSQL
+        // Query limpia sin caracteres invisibles
         const query = `
             SELECT 
                 cc.id_carga,
@@ -176,21 +170,22 @@ router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista'
                 cc.dias_laborados,
                 cc.id_autobus,
                 cc.id_empleado_operador,
+                cc.desviacion_km,
+                cc.km_esperados,
+                cc.motivo_desviacion,
                 a.economico,
-                o.nombre_completo as nombre_operador
-                
+                o.nombre_completo as nombre_operador,
+                d.nombre as nombre_despachador
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
+            LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
             WHERE cc.id_carga = $1
         `;
 
-        console.log('📝 Ejecutando query con ID:', id);
         const result = await pool.query(query, [id]);
-        console.log('✅ Query ejecutada. Registros encontrados:', result.rows.length);
 
         if (result.rows.length === 0) {
-            console.log('⚠️ No se encontró la carga');
             return res.status(404).json({ 
                 error: 'Carga no encontrada',
                 message: `No se encontró una carga con el ID ${id}` 
@@ -198,15 +193,8 @@ router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista'
         }
 
         const carga = result.rows[0];
-        console.log('✅ Datos obtenidos:', {
-            id_carga: carga.id_carga,
-            economico: carga.economico,
-            km_inicial: carga.km_inicial,
-            km_final: carga.km_final,
-            tipo_calculo: carga.tipo_calculo
-        });
 
-        // Si es tipo 'vueltas', necesitamos obtener las rutas
+        // Si es tipo 'vueltas', obtenemos las rutas
         if (carga.tipo_calculo === 'vueltas') {
             const rutasQuery = `
                 SELECT ccr.id_ruta, ccr.numero_vueltas, r.nombre_ruta
@@ -216,22 +204,28 @@ router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista'
             `;
             const rutasResult = await pool.query(rutasQuery, [id]);
             carga.rutas_realizadas = rutasResult.rows;
-            console.log('✅ Rutas obtenidas:', rutasResult.rows.length);
+            
+            // Formatear string para info rápida
+            if (rutasResult.rows.length > 0) {
+                carga.rutas_info = rutasResult.rows.map(r => `${r.nombre_ruta} (${r.numero_vueltas} vueltas)`).join(', ');
+            }
+        } else if (carga.tipo_calculo === 'dias') {
+            // Obtener nombre de la ruta principal si es por días
+            if (carga.id_ruta_principal) {
+                const rutaPrincipal = await pool.query('SELECT nombre_ruta FROM rutas WHERE id_ruta = $1', [carga.id_ruta_principal]);
+                if (rutaPrincipal.rows.length > 0) {
+                    carga.rutas_info = `${rutaPrincipal.rows[0].nombre_ruta} (${carga.dias_laborados} días)`;
+                }
+            }
         }
 
         res.json(carga);
-        console.log('✅ Respuesta enviada exitosamente');
 
     } catch (error) {
-        console.error('❌ ERROR en /detalle/:id');
-        console.error('Tipo:', error.constructor.name);
-        console.error('Mensaje:', error.message);
-        console.error('Stack:', error.stack);
-        
+        console.error('❌ ERROR en /detalle/:id:', error);
         res.status(500).json({ 
             error: 'Error en el servidor',
-            message: error.message,
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            message: error.message
         });
     }
 });
