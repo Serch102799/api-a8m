@@ -3,6 +3,7 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
+const { registrarAuditoria } = require('../servicios/auditService');
 router.use(verifyToken);
 
 /**
@@ -197,7 +198,7 @@ router.get('/detalles/:id', async (req, res) => {
  *       201:
  *         description: Entrada creada
  */
-router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario'])], async (req, res) => {
   // 1. Se recibe 'Fecha_Operacion' del body
   const { 
     ID_Proveedor, 
@@ -228,6 +229,19 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req,
       // 4. Se añade 'Fecha_Operacion' al arreglo de parámetros
       [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID, Razon_Social, Fecha_Operacion]
     );
+    const nuevaEntrada = result.rows[0];
+    registrarAuditoria({
+      id_usuario: req.user.id,
+      tipo_accion: 'CREAR',
+      recurso_afectado: 'entrada_almacen',
+      id_recurso_afectado: nuevaEntrada.id_entrada,
+      detalles_cambio: { 
+          factura: Factura_Proveedor, 
+          proveedor: ID_Proveedor, 
+          razon_social: Razon_Social 
+      },
+      ip_address: req.ip
+    });
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error al crear entrada:', error);

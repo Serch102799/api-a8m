@@ -91,77 +91,73 @@ router.post(
     }
   }
 );
-router.get(
-  '/auditoria', // <-- Ruta para /admin/auditoria (sin ID)
-  [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])],
-  async (req, res) => {
-    
-    // ¡LA CORRECCIÓN ESTÁ AQUÍ! Se asignan valores por defecto
-    const { page = 1, limit = 15, search = '' } = req.query; 
-    const offset = (page - 1) * limit;
-    
-    try {
-        let queryParams = [];
-        let whereClauses = [];
-        let whereString = '';
-        
-        // Lógica de búsqueda
-        if (search.trim()) {
-            queryParams.push(`%${search.trim()}%`);
-            whereClauses.push(`(e.nombre ILIKE $${queryParams.length} OR a.recurso_afectado ILIKE $${queryParams.length} OR a.tipo_accion ILIKE $${queryParams.length})`);
-        }
-        
-        if(whereClauses.length > 0) {
-            whereString = `WHERE ${whereClauses.join(' AND ')}`;
-        }
+router.get('/auditoria', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
+    
+    const { page = 1, limit = 15, search = '' } = req.query; 
+    
+    try {
+        const queryParams = [];
+        let whereClauses = [];
+        
+        // Lógica de búsqueda
+        if (search && search.trim() !== '') {
+            queryParams.push(`%${search.trim()}%`);
+            // Busca por nombre de usuario, recurso o tipo de acción
+            whereClauses.push(`(e.nombre ILIKE $${queryParams.length} OR a.recurso_afectado ILIKE $${queryParams.length} OR a.tipo_accion ILIKE $${queryParams.length})`);
+        }
+        
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        // 1. Contar el total de registros
-        const totalQuery = `
-            SELECT COUNT(*)
-            FROM auditoria_acciones a
-            LEFT JOIN empleado e ON a.id_usuario = e.id_empleado
-            ${whereString};
-        `;
-        const totalResult = await pool.query(totalQuery, queryParams);
-        const totalItems = parseInt(totalResult.rows[0].count, 10);
-        
-        // 2. Agregar parámetros de paginación
-        queryParams.push(limit);
-        queryParams.push(offset);
+        // 1. Contar el total de registros
+        const totalQuery = `
+            SELECT COUNT(*)
+            FROM auditoria_acciones a
+            LEFT JOIN empleado e ON a.id_usuario = e.id_empleado
+            ${whereString}
+        `;
+        
+        const totalResult = await pool.query(totalQuery, queryParams);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+        
+        // 2. Calcular offset
+        const offset = (page - 1) * limit;
+        
+        // 3. Agregar parámetros de paginación
+        queryParams.push(limit);
+        queryParams.push(offset);
 
-        // 3. Obtener los datos paginados
-        const dataQuery = `
-          SELECT 
-            a.timestamp,
-            a.tipo_accion,
-            a.recurso_afectado,
-            a.id_recurso_afectado,
-            a.detalles_cambio,
-            a.ip_address,
-            e.nombre as nombre_usuario
-          FROM 
-            auditoria_acciones a
-          JOIN 
-            empleado e ON a.id_usuario = e.id_empleado
-          ${whereString}
-          ORDER BY 
-            a.timestamp DESC
-          LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
-        `;
+        // 4. Obtener los datos paginados
+        const dataQuery = `
+            SELECT 
+                a.timestamp,
+                a.tipo_accion,
+                a.recurso_afectado,
+                a.id_recurso_afectado,
+                a.detalles_cambio,
+                a.ip_address,
+                e.nombre as nombre_usuario
+            FROM 
+                auditoria_acciones a
+            LEFT JOIN 
+                empleado e ON a.id_usuario = e.id_empleado
+            ${whereString}
+            ORDER BY 
+                a.timestamp DESC
+            LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}
+        `;
 
-        const dataResult = await pool.query(dataQuery, queryParams);
-        
-        res.status(200).json({
-            total: totalItems,
-            data: dataResult.rows
-        });
+        const dataResult = await pool.query(dataQuery, queryParams);
+        
+        res.status(200).json({
+            total: totalItems,
+            data: dataResult.rows
+        });
 
-    } catch (error) {
-      console.error('Error en GET /admin/auditoria (paginado):', error.message);
-      res.status(500).json({ message: 'Error del servidor' });
-    }
-  }
-);
+    } catch (error) {
+        console.error('Error en GET /admin/auditoria (paginado):', error.message);
+        res.status(500).json({ message: 'Error del servidor' });
+    }
+});
 router.get(
   '/auditoria/:id_usuario',
   [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], // Protegido
@@ -205,7 +201,35 @@ router.get(
     }
   }
 );
+router.post('/registrar-evento', verifyToken, async (req, res) => {
+    const { tipo_accion, modulo, detalles } = req.body;
 
+    // Validar datos mínimos
+    if (!tipo_accion || !modulo) {
+        return res.status(400).json({ message: 'Faltan datos del evento.' });
+    }
+
+    try {
+        // Usamos el servicio de auditoría que ya tenemos
+        // No usamos await para no bloquear la respuesta (fire-and-forget)
+        const { registrarAuditoria } = require('../servicios/auditService');
+        
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: tipo_accion, 
+            recurso_afectado: modulo, 
+            id_recurso_afectado: null, 
+            detalles_cambio: detalles, 
+            ip_address: req.ip
+        });
+
+        res.status(200).json({ message: 'Evento registrado' });
+
+    } catch (error) {
+        console.error('Error al registrar evento manual:', error);
+        res.status(500).json({ message: 'Error interno' });
+    }
+});
 /**
  * @swagger
  * tags:

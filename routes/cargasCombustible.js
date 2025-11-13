@@ -6,7 +6,7 @@ const checkRole = require('../middleware/checkRole');
 const { registrarAuditoria } = require('../servicios/auditService');
 
 // ============================================
-// GET / - Listado con filtros (YA EXISTENTE)
+// GET / - Listado con filtros 
 // ============================================
 router.get('/', verifyToken, async (req, res) => {
     const {
@@ -149,7 +149,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // ============================================
-// GET /detalle/:id - DEBE ESTAR ANTES DEL PUT
+// GET /detalle/:id 
 // ============================================
 router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     const { id } = req.params;
@@ -597,7 +597,7 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
 
 
 // ============================================
-// POST / - Registro de nueva carga (YA EXISTENTE)
+// POST / - Registro de nueva carga 
 // ============================================
 router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUsuario', 'Admin'])], async (req, res) => {
     const {
