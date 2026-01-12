@@ -15,11 +15,13 @@ const router = express.Router();
  */
 
 // 🔒 Obtener todos los empleados activos
+// 🔒 Obtener TODOS los empleados (Activos e Inactivos) para el panel Admin
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id_empleado, nombre, puesto, departamento, nombre_usuario, estado_cuenta, id_rol 
-       FROM empleado WHERE estado_cuenta = 'Activo'`
+       FROM empleado 
+       ORDER BY id_empleado ASC` // Quitamos el WHERE estado_cuenta = 'Activo'
     );
     res.json(result.rows);
   } catch (error) {
@@ -101,7 +103,58 @@ router.post('/', [
       res.status(500).json({ message: 'Error al crear el empleado' });
     }
 });
+router.put('/:id', [
+    verifyToken,
+    checkRole(['Admin', 'SuperUsuario']),
+    body('Nombre').notEmpty().withMessage('El nombre es requerido'),
+    body('Nombre_Usuario').notEmpty().withMessage('El usuario es requerido'),
+    body('ID_Rol').isNumeric().withMessage('El rol es requerido')
+], async (req, res) => {
+    
+    const { id } = req.params;
+    const { Nombre, Puesto, Departamento, Nombre_Usuario, ID_Rol, Estado_Cuenta } = req.body;
 
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errores: errors.array() });
+    }
+
+    try {
+        // Verificar si el nombre de usuario ya existe en OTRO empleado (para evitar duplicados al editar)
+        const checkUser = await pool.query(
+            'SELECT id_empleado FROM empleado WHERE lower(nombre_usuario) = lower($1) AND id_empleado != $2',
+            [Nombre_Usuario, id]
+        );
+
+        if (checkUser.rows.length > 0) {
+            return res.status(400).json({ message: 'El nombre de usuario ya está ocupado por otra persona.' });
+        }
+
+        // Ejecutar la actualización
+        const result = await pool.query(
+            `UPDATE empleado 
+             SET nombre = $1, 
+                 puesto = $2, 
+                 departamento = $3, 
+                 nombre_usuario = $4, 
+                 id_rol = $5, 
+                 estado_cuenta = $6
+             WHERE id_empleado = $7
+             RETURNING *`,
+            [Nombre, Puesto, Departamento, Nombre_Usuario, ID_Rol, Estado_Cuenta, id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Empleado no encontrado.' });
+        }
+
+        res.json({ message: 'Empleado actualizado correctamente.', empleado: result.rows[0] });
+
+    } catch (error) {
+        console.error('Error al actualizar empleado:', error);
+        res.status(500).json({ message: 'Error interno al actualizar.' });
+    }
+});
 // 🔒 Actualizar estado de cuenta (requiere Admin)
 router.put('/usuario/:nombreUsuario', verifyToken, checkRole(['Admin', 'SuperUsuario']), async (req, res) => {
   const { nombreUsuario } = req.params;
