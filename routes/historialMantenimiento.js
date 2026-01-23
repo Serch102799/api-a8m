@@ -70,7 +70,7 @@ router.get('/:idAutobus', async (req, res) => {
   try {
     // Consulta para obtener la lista de todos los movimientos (refacciones e insumos)
     const historialPromise = pool.query(
-      `SELECT fecha, kilometraje, tipo_item, nombre, marca, cantidad, solicitado_por
+      `SELECT fecha, kilometraje, tipo_item, nombre, marca, cantidad, solicitado_por, costo
        FROM (
           -- Movimientos de REFACCIONES
           SELECT 
@@ -79,11 +79,14 @@ router.get('/:idAutobus', async (req, res) => {
             'Refacción' as tipo_item,
             r.nombre,
             r.marca,
-            ds.cantidad_despachada as cantidad,
-            e.nombre as solicitado_por
+            (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
+            e.nombre as solicitado_por,
+            -- CALCULO DEL COSTO INDIVIDUAL
+            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo
           FROM detalle_salida ds
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote  -- Necesario para el costo
           JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
           WHERE sa.id_autobus = $1
 
@@ -96,8 +99,10 @@ router.get('/:idAutobus', async (req, res) => {
             'Insumo' as tipo_item,
             i.nombre,
             i.marca,
-            dsi.cantidad_usada as cantidad,
-            e.nombre as solicitado_por
+            (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
+            e.nombre as solicitado_por,
+            -- CALCULO DEL COSTO INDIVIDUAL
+            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo
           FROM detalle_salida_insumo dsi
           JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
@@ -108,7 +113,6 @@ router.get('/:idAutobus', async (req, res) => {
       [idAutobus]
     );
 
-    // Consulta para calcular el COSTO TOTAL (sumando refacciones e insumos)
     const costoTotalPromise = pool.query(
   `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
       -- Costos de REFACCIONES (calcula sobre la cantidad neta)
@@ -136,13 +140,18 @@ router.get('/:idAutobus', async (req, res) => {
       costoTotalPromise,
     ]);
     
+    const historialFormateado = historialResult.rows.map(item => ({
+        ...item,
+        costo: parseFloat(item.costo || 0)
+    }));
+
     res.json({
-      historial: historialResult.rows,
+      historial: historialFormateado,
       costoTotal: parseFloat(costoTotalResult.rows[0].costo_total || 0),
     });
 
   } catch (error) {
-    console.error('Error al obtener historial de movimientos:', error);
+    console.error('Error:', error);
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
