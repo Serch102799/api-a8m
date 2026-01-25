@@ -68,11 +68,10 @@ router.get('/:idAutobus', async (req, res) => {
   const { idAutobus } = req.params;
 
   try {
-    // Consulta para obtener la lista de todos los movimientos (refacciones e insumos)
     const historialPromise = pool.query(
-      `SELECT fecha, kilometraje, tipo_item, nombre, marca, cantidad, solicitado_por, costo
+      `SELECT fecha, kilometraje, tipo_item, nombre, marca, cantidad, solicitado_por, costo_unitario, costo_total
        FROM (
-          -- Movimientos de REFACCIONES
+          -- 1. REFACCIONES
           SELECT 
             sa.fecha_operacion as fecha,
             sa.kilometraje_autobus as kilometraje,
@@ -81,18 +80,20 @@ router.get('/:idAutobus', async (req, res) => {
             r.marca,
             (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
             e.nombre as solicitado_por,
-            -- CALCULO DEL COSTO INDIVIDUAL
-            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo
+            -- Agregamos Costo Unitario
+            COALESCE(l.costo_unitario_final, 0) as costo_unitario,
+            -- Calculamos Costo Total
+            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * COALESCE(l.costo_unitario_final, 0)) as costo_total
           FROM detalle_salida ds
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
-          JOIN lote_refaccion l ON ds.id_lote = l.id_lote  -- Necesario para el costo
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
           WHERE sa.id_autobus = $1
 
           UNION ALL
 
-          -- Movimientos de INSUMOS
+          -- 2. INSUMOS
           SELECT
             sa.fecha_operacion as fecha,
             sa.kilometraje_autobus as kilometraje,
@@ -101,15 +102,17 @@ router.get('/:idAutobus', async (req, res) => {
             i.marca,
             (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
             e.nombre as solicitado_por,
-            -- CALCULO DEL COSTO INDIVIDUAL
-            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo
+            -- Agregamos Costo Unitario (Histórico)
+            COALESCE(dsi.costo_al_momento, 0) as costo_unitario,
+            -- Calculamos Costo Total
+            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * COALESCE(dsi.costo_al_momento, 0)) as costo_total
           FROM detalle_salida_insumo dsi
           JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
           JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
           WHERE sa.id_autobus = $1
        ) as movimientos
-       ORDER BY fecha DESC;`,
+       ORDER BY fecha DESC`,
       [idAutobus]
     );
 

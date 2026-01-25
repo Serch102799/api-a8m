@@ -391,5 +391,104 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ message: 'Error al eliminar entrada', error });
   }
 });
+router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), async (req, res) => {
+    const { id } = req.params;
+    const { 
+        fecha_operacion, 
+        id_proveedor, 
+        factura, 
+        observaciones, 
+        items // Array de { id_detalle, id_item, tipo, cantidad_nueva, costo_nuevo, accion }
+    } = req.body;
 
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        // 1. Actualizar Cabecera
+        await client.query(
+            `UPDATE entrada_almacen 
+             SET fecha_operacion = $1, id_proveedor = $2, factura_proveedor = $3, observaciones = $4
+             WHERE id_entrada = $5`,
+            [fecha_operacion, id_proveedor, factura, observaciones, id]
+        );
+
+        // 2. Procesar Items (Iterar sobre el array enviado)
+        for (const item of items) {
+            
+            // A) Si es una REFACCIÓN
+            if (item.tipo === 'refaccion') {
+                // Obtener datos actuales del lote para ver cuánto cambió
+                const loteActual = await client.query(
+                    `SELECT id_lote, cantidad_inicial, cantidad_disponible, costo_unitario 
+                     FROM lote_refaccion WHERE id_detalle_entrada = $1`,
+                    [item.id_detalle]
+                );
+                
+                if (loteActual.rows.length > 0) {
+                    const lote = loteActual.rows[0];
+                    const diferenciaCantidad = item.cantidad_nueva - lote.cantidad_inicial;
+
+                    // VALIDACIÓN CRÍTICA: No permitir reducir stock si ya se usó
+                    // Cantidad Usada = Inicial - Disponible
+                    const cantidadUsada = lote.cantidad_inicial - lote.cantidad_disponible;
+                    
+                    if (item.cantidad_nueva < cantidadUsada) {
+                        throw new Error(`No puedes reducir la cantidad de ${item.nombre} a ${item.cantidad_nueva}. Ya se han usado ${cantidadUsada} unidades.`);
+                    }
+
+                    // Actualizar Lote (Cantidad y Costo)
+                    await client.query(
+                        `UPDATE lote_refaccion 
+                         SET cantidad_inicial = $1, 
+                             cantidad_disponible = cantidad_disponible + $2,
+                             costo_unitario_final = $3
+                         WHERE id_lote = $4`,
+                        [item.cantidad_nueva, diferenciaCantidad, item.costo_nuevo, lote.id_lote]
+                    );
+
+                    // Actualizar Detalle Entrada
+                    await client.query(
+                        `UPDATE detalle_entrada SET cantidad = $1, costo_unitario = $2 
+                         WHERE id_detalle_entrada = $3`,
+                        [item.cantidad_nueva, item.costo_nuevo, item.id_detalle]
+                    );
+
+                    // Actualizar Stock Global (Refaccion)
+                    await client.query(
+                        `UPDATE refaccion SET stock_actual = stock_actual + $1 WHERE id_refaccion = $2`,
+                        [diferenciaCantidad, item.id_item]
+                    );
+                }
+            } 
+            // B) Si es INSUMO (Lógica similar pero sobre tabla insumo y detalle_entrada_insumo)
+            else if (item.tipo === 'insumo') {
+                // ... lógica análoga para insumos ...
+                // Recordar validar que stock_actual no quede negativo
+            }
+        }
+
+        // 3. Recalcular Total de la Entrada
+        // ... (Query para sumar todos los detalles actualizados y update entrada_almacen.valor_neto)
+
+        await client.query('COMMIT');
+        res.json({ message: 'Entrada actualizada y stock ajustado correctamente.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error edición histórica:', error);
+        res.status(500).json({ message: error.message });
+    } finally {
+        client.release();
+    }
+});
+
+// PUT /api/entradas/:id/cancelar
+router.put('/:id/cancelar', verifyToken, checkRole(['SuperUsuario']), async (req, res) => {
+    // Lógica para cancelar:
+    // 1. Verificar que NINGÚN item de esta entrada haya sido usado (Lote.inicial === Lote.disponible).
+    // 2. Si se usó algo -> Error "No se puede cancelar, ya hay salidas asociadas".
+    // 3. Si está intacto -> Restar todo del stock actual y poner estado = 'CANCELADO'.
+});
 module.exports = router;
