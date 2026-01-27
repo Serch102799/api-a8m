@@ -104,8 +104,6 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
         const searchTerm = `%${search}%`;
         const offset = (page - 1) * limit;
 
-        // 1. Consulta Base (La usamos para contar y para traer datos)
-        // Usamos una CTE (Common Table Expression) para limpiar el código
         const baseQuery = `
             WITH inventario_unificado AS (
                 SELECT 
@@ -130,12 +128,10 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
             WHERE nombre ILIKE $1 OR marca ILIKE $1
         `;
 
-        // 2. Obtener Total de Registros (Para la paginación)
         const countQuery = `SELECT COUNT(*) FROM (${baseQuery}) as total`;
         const countResult = await pool.query(countQuery, [searchTerm]);
         const totalItems = parseInt(countResult.rows[0].count, 10);
 
-        // 3. Obtener Datos Paginados
         const dataQuery = `
             ${baseQuery}
             ORDER BY nombre ASC
@@ -155,7 +151,7 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
 });
 
 // ======================================================================
-// 2. APLICAR AJUSTE (Lógica Compleja para Refacciones vs Insumos)
+// 2. APLICAR AJUSTE
 // ======================================================================
 router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
     const { id, tipo, stock_fisico, motivo } = req.body;
@@ -167,7 +163,7 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
         let diferencia = 0;
         let stockSistema = 0;
 
-        // CASO A: ES UN INSUMO (Fácil, tiene columna)
+        // --- CASO A: INSUMO ---
         if (tipo === 'Insumo') {
             const actualRes = await client.query('SELECT stock_actual FROM insumo WHERE id_insumo = $1 FOR UPDATE', [id]);
             if (actualRes.rows.length === 0) throw new Error('Insumo no encontrado');
@@ -180,9 +176,8 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
             }
         } 
         
-        // CASO B: ES UNA REFACCIÓN (Difícil, usa lotes)
+        // --- CASO B: REFACCIÓN ---
         else if (tipo === 'Refacción') {
-            // 1. Calcular stock actual sumando lotes existentes
             const stockRes = await client.query(
                 `SELECT COALESCE(SUM(cantidad_disponible), 0) as total 
                  FROM lote_refaccion WHERE id_refaccion = $1`, 
@@ -192,17 +187,20 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
             diferencia = stock_fisico - stockSistema;
 
             if (diferencia > 0) {
-                // SOBRA MATERIAL (Entrada): Creamos un "Lote de Ajuste"
+                // SOBRA MATERIAL (Entrada): Creamos un lote de ajuste
+                // CORRECCIÓN: Eliminamos 'cantidad_inicial' del INSERT
+                // Asumimos costo 0 o podrías buscar el último costo registrado
                 await client.query(
-                    `INSERT INTO lote_refaccion (id_refaccion, cantidad_inicial, cantidad_disponible, costo_unitario_final, numero_lote)
-                     VALUES ($1, $2, $2, 0, 'AJUSTE-2026')`, 
+                    `INSERT INTO lote_refaccion 
+                        (id_refaccion, cantidad_disponible, costo_unitario_final, numero_lote, fecha_vencimiento)
+                     VALUES ($1, $2, 0, 'AJUSTE-2026', NULL)`, 
                     [id, diferencia]
                 );
             } else if (diferencia < 0) {
                 // FALTA MATERIAL (Salida): Restar de lotes existentes (FIFO)
                 let cantidadARestar = Math.abs(diferencia);
                 
-                // CORRECCIÓN AQUÍ: Cambiado 'id_lote_refaccion' por 'id_lote'
+                // Asegúrate que tu llave primaria sea 'id_lote' (como corregimos antes)
                 const lotesRes = await client.query(
                     `SELECT id_lote, cantidad_disponible 
                      FROM lote_refaccion 
@@ -218,16 +216,13 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
                     let restarDelLote = 0;
 
                     if (disponible >= cantidadARestar) {
-                        // Este lote cubre todo
                         restarDelLote = cantidadARestar;
                         cantidadARestar = 0;
                     } else {
-                        // Se acaba este lote y seguimos con el siguiente
                         restarDelLote = disponible;
                         cantidadARestar -= disponible;
                     }
 
-                    // CORRECCIÓN AQUÍ: Usamos 'id_lote' en el UPDATE
                     await client.query(
                         `UPDATE lote_refaccion 
                          SET cantidad_disponible = cantidad_disponible - $1 
@@ -255,7 +250,12 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error en ajuste:', error);
-        res.status(500).json({ message: 'Error al procesar el ajuste.', error: error.message });
+        
+        // Mensaje de error amigable
+        let msg = 'Error al procesar el ajuste.';
+        if(error.code === '42703') msg = 'Error de BD: Columna desconocida (posiblemente id_lote o cantidad_inicial).';
+        
+        res.status(500).json({ message: msg, error: error.message });
     } finally {
         client.release();
     }
