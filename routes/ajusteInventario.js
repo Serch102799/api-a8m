@@ -114,9 +114,8 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
                     'Refacción' as tipo, 
                     COALESCE((SELECT SUM(l.cantidad_disponible) FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion), 0) as stock_actual,
                     r.unidad_medida as unidad,
-                    -- NUEVOS CAMPOS
                     r.numero_parte, 
-                    r.categoria
+                    r.categoria  -- Esta columna suele ser VARCHAR
                 FROM refaccion r
                 
                 UNION ALL
@@ -129,9 +128,9 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
                     'Insumo' as tipo, 
                     stock_actual, 
                     unidad_medida as unidad,
-                    -- NUEVOS CAMPOS (Adaptados para insumos)
-                    '---' as numero_parte,  -- Los insumos no suelen tener N. Parte, ponemos guiones
-                    tipo_insumo as categoria -- Usamos 'tipo_insumo' como categoría
+                    '---' as numero_parte,
+                    -- 👇 CORRECCIÓN AQUÍ: Convertimos el ENUM a TEXTO
+                    tipo_insumo::text as categoria 
                 FROM insumo
             )
             SELECT * FROM inventario_unificado
