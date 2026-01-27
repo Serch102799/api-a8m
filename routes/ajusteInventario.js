@@ -187,20 +187,21 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
             diferencia = stock_fisico - stockSistema;
 
             if (diferencia > 0) {
-                // SOBRA MATERIAL (Entrada): Creamos un lote de ajuste
-                // CORRECCIÓN: Eliminamos 'cantidad_inicial' del INSERT
-                // Asumimos costo 0 o podrías buscar el último costo registrado
+                // SOBRA MATERIAL (Entrada): Creamos un lote nuevo
+                // CORRECCIÓN FINAL: Usamos SOLO las columnas que existen en tu imagen.
+                // Asumimos costo 0 para el ajuste (costo_unitario_final, subtotal, iva).
+                // Usamos CURRENT_DATE para fecha_ingreso.
                 await client.query(
                     `INSERT INTO lote_refaccion 
-                        (id_refaccion, cantidad_disponible, costo_unitario_final, numero_lote, fecha_vencimiento)
-                     VALUES ($1, $2, 0, 'AJUSTE-2026', NULL)`, 
+                        (id_refaccion, cantidad_disponible, costo_unitario_final, costo_unitario_subtotal, monto_iva_unitario, fecha_ingreso)
+                     VALUES ($1, $2, 0, 0, 0, CURRENT_DATE)`, 
                     [id, diferencia]
                 );
             } else if (diferencia < 0) {
                 // FALTA MATERIAL (Salida): Restar de lotes existentes (FIFO)
                 let cantidadARestar = Math.abs(diferencia);
                 
-                // Asegúrate que tu llave primaria sea 'id_lote' (como corregimos antes)
+                // Usamos 'id_lote' que es tu llave primaria
                 const lotesRes = await client.query(
                     `SELECT id_lote, cantidad_disponible 
                      FROM lote_refaccion 
@@ -251,9 +252,9 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
         await client.query('ROLLBACK');
         console.error('Error en ajuste:', error);
         
-        // Mensaje de error amigable
         let msg = 'Error al procesar el ajuste.';
-        if(error.code === '42703') msg = 'Error de BD: Columna desconocida (posiblemente id_lote o cantidad_inicial).';
+        if(error.code === '42703') msg = `Error de BD: Columna desconocida. Detalles: ${error.message}`;
+        if(error.code === '23502') msg = `Error de BD: Falta un dato obligatorio (NOT NULL). Detalles: ${error.message}`;
         
         res.status(500).json({ message: msg, error: error.message });
     } finally {
