@@ -106,26 +106,36 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
 
         const baseQuery = `
             WITH inventario_unificado AS (
+                -- 1. REFACCIONES
                 SELECT 
                     r.id_refaccion as id, 
                     r.nombre, 
                     r.marca, 
                     'Refacción' as tipo, 
                     COALESCE((SELECT SUM(l.cantidad_disponible) FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion), 0) as stock_actual,
-                    r.unidad_medida as unidad
+                    r.unidad_medida as unidad,
+                    -- NUEVOS CAMPOS
+                    r.numero_parte, 
+                    r.categoria
                 FROM refaccion r
+                
                 UNION ALL
+                
+                -- 2. INSUMOS
                 SELECT 
                     id_insumo as id, 
                     nombre, 
                     marca, 
                     'Insumo' as tipo, 
                     stock_actual, 
-                    unidad_medida as unidad
+                    unidad_medida as unidad,
+                    -- NUEVOS CAMPOS (Adaptados para insumos)
+                    '---' as numero_parte,  -- Los insumos no suelen tener N. Parte, ponemos guiones
+                    tipo_insumo as categoria -- Usamos 'tipo_insumo' como categoría
                 FROM insumo
             )
             SELECT * FROM inventario_unificado
-            WHERE nombre ILIKE $1 OR marca ILIKE $1
+            WHERE nombre ILIKE $1 OR marca ILIKE $1 OR numero_parte ILIKE $1
         `;
 
         const countQuery = `SELECT COUNT(*) FROM (${baseQuery}) as total`;
