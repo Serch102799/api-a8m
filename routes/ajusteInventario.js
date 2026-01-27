@@ -97,6 +97,169 @@ LIMIT $${params.length + 1} OFFSET $${params.length + 2}
         });
     }
 });
+router.get('/inventario-global', verifyToken, async (req, res) => {
+    const { search = '', page = 1, limit = 10 } = req.query;
+    
+    try {
+        const searchTerm = `%${search}%`;
+        const offset = (page - 1) * limit;
+
+        // 1. Consulta Base (La usamos para contar y para traer datos)
+        // Usamos una CTE (Common Table Expression) para limpiar el código
+        const baseQuery = `
+            WITH inventario_unificado AS (
+                SELECT 
+                    r.id_refaccion as id, 
+                    r.nombre, 
+                    r.marca, 
+                    'Refacción' as tipo, 
+                    COALESCE((SELECT SUM(l.cantidad_disponible) FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion), 0) as stock_actual,
+                    r.unidad_medida as unidad
+                FROM refaccion r
+                UNION ALL
+                SELECT 
+                    id_insumo as id, 
+                    nombre, 
+                    marca, 
+                    'Insumo' as tipo, 
+                    stock_actual, 
+                    unidad_medida as unidad
+                FROM insumo
+            )
+            SELECT * FROM inventario_unificado
+            WHERE nombre ILIKE $1 OR marca ILIKE $1
+        `;
+
+        // 2. Obtener Total de Registros (Para la paginación)
+        const countQuery = `SELECT COUNT(*) FROM (${baseQuery}) as total`;
+        const countResult = await pool.query(countQuery, [searchTerm]);
+        const totalItems = parseInt(countResult.rows[0].count, 10);
+
+        // 3. Obtener Datos Paginados
+        const dataQuery = `
+            ${baseQuery}
+            ORDER BY nombre ASC
+            LIMIT $2 OFFSET $3
+        `;
+        const dataResult = await pool.query(dataQuery, [searchTerm, limit, offset]);
+
+        res.json({
+            data: dataResult.rows,
+            total: totalItems
+        });
+
+    } catch (error) {
+        console.error('Error SQL en inventario-global:', error);
+        res.status(500).json({ message: 'Error al obtener inventario global.' });
+    }
+});
+
+// ======================================================================
+// 2. APLICAR AJUSTE (Lógica Compleja para Refacciones vs Insumos)
+// ======================================================================
+router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+    const { id, tipo, stock_fisico, motivo } = req.body;
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        let diferencia = 0;
+        let stockSistema = 0;
+
+        // CASO A: ES UN INSUMO (Fácil, tiene columna)
+        if (tipo === 'Insumo') {
+            const actualRes = await client.query('SELECT stock_actual FROM insumo WHERE id_insumo = $1 FOR UPDATE', [id]);
+            if (actualRes.rows.length === 0) throw new Error('Insumo no encontrado');
+            
+            stockSistema = parseFloat(actualRes.rows[0].stock_actual);
+            diferencia = stock_fisico - stockSistema;
+
+            if (diferencia !== 0) {
+                await client.query('UPDATE insumo SET stock_actual = $1 WHERE id_insumo = $2', [stock_fisico, id]);
+            }
+        } 
+        
+        // CASO B: ES UNA REFACCIÓN (Difícil, usa lotes)
+        else if (tipo === 'Refacción') {
+            // 1. Calcular stock actual sumando lotes existentes
+            const stockRes = await client.query(
+                `SELECT COALESCE(SUM(cantidad_disponible), 0) as total 
+                 FROM lote_refaccion WHERE id_refaccion = $1`, 
+                [id]
+            );
+            stockSistema = parseFloat(stockRes.rows[0].total);
+            diferencia = stock_fisico - stockSistema;
+
+            if (diferencia > 0) {
+                // SOBRA MATERIAL (Entrada): Creamos un "Lote de Ajuste"
+                await client.query(
+                    `INSERT INTO lote_refaccion (id_refaccion, cantidad_inicial, cantidad_disponible, costo_unitario_final, numero_lote)
+                     VALUES ($1, $2, $2, 0, 'AJUSTE-2026')`, 
+                    [id, diferencia]
+                );
+            } else if (diferencia < 0) {
+                // FALTA MATERIAL (Salida): Restar de lotes existentes (FIFO)
+                let cantidadARestar = Math.abs(diferencia);
+                
+                // CORRECCIÓN AQUÍ: Cambiado 'id_lote_refaccion' por 'id_lote'
+                const lotesRes = await client.query(
+                    `SELECT id_lote, cantidad_disponible 
+                     FROM lote_refaccion 
+                     WHERE id_refaccion = $1 AND cantidad_disponible > 0 
+                     ORDER BY id_lote ASC`, 
+                    [id]
+                );
+
+                for (const lote of lotesRes.rows) {
+                    if (cantidadARestar <= 0) break;
+
+                    const disponible = parseFloat(lote.cantidad_disponible);
+                    let restarDelLote = 0;
+
+                    if (disponible >= cantidadARestar) {
+                        // Este lote cubre todo
+                        restarDelLote = cantidadARestar;
+                        cantidadARestar = 0;
+                    } else {
+                        // Se acaba este lote y seguimos con el siguiente
+                        restarDelLote = disponible;
+                        cantidadARestar -= disponible;
+                    }
+
+                    // CORRECCIÓN AQUÍ: Usamos 'id_lote' en el UPDATE
+                    await client.query(
+                        `UPDATE lote_refaccion 
+                         SET cantidad_disponible = cantidad_disponible - $1 
+                         WHERE id_lote = $2`,
+                        [restarDelLote, lote.id_lote]
+                    );
+                }
+            }
+        }
+
+        if (diferencia === 0) {
+            await client.query('ROLLBACK');
+            return res.json({ message: 'Sin cambios. El stock físico coincide con el sistema.' });
+        }
+
+        console.log(`AJUSTE APLICADO | ${tipo} ID:${id} | Sistema: ${stockSistema} -> Físico: ${stock_fisico} | Dif: ${diferencia}`);
+
+        await client.query('COMMIT');
+        res.json({ 
+            message: 'Inventario ajustado correctamente.', 
+            diferencia: diferencia,
+            nuevo_stock: stock_fisico 
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error en ajuste:', error);
+        res.status(500).json({ message: 'Error al procesar el ajuste.', error: error.message });
+    } finally {
+        client.release();
+    }
+});
 
 // ============================================
 // GET /detalle/:id - Obtener detalle completo de un ajuste
