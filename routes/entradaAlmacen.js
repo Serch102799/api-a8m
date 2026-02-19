@@ -485,10 +485,115 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
 });
 
 // PUT /api/entradas/:id/cancelar
-router.put('/:id/cancelar', verifyToken, checkRole(['SuperUsuario']), async (req, res) => {
-    // Lógica para cancelar:
-    // 1. Verificar que NINGÚN item de esta entrada haya sido usado (Lote.inicial === Lote.disponible).
-    // 2. Si se usó algo -> Error "No se puede cancelar, ya hay salidas asociadas".
-    // 3. Si está intacto -> Restar todo del stock actual y poner estado = 'CANCELADO'.
+router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'SuperAdmin'])], async (req, res) => {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN'); // Iniciamos transacción
+
+        // 1. Validar la entrada maestra
+        const entradaRes = await client.query(`
+            SELECT estado, observaciones 
+            FROM entrada_almacen 
+            WHERE id_entrada = $1 FOR UPDATE
+        `, [id]);
+        
+        if (entradaRes.rows.length === 0) throw new Error('La entrada no existe.');
+        
+        const entradaInfo = entradaRes.rows[0];
+        if (entradaInfo.estado === 'CANCELADO' || entradaInfo.estado === 'CANCELADA') {
+            throw new Error('Esta entrada ya fue cancelada previamente.');
+        }
+
+        // ==========================================
+        // 2A. REVERTIR REFACCIONES (Tabla: detalle_entrada)
+        // ==========================================
+        const detallesRefaccionRes = await client.query(`
+            SELECT id_detalle_entrada, id_refaccion, cantidad_recibida 
+            FROM detalle_entrada 
+            WHERE id_entrada = $1
+        `, [id]);
+
+        for (const detalle of detallesRefaccionRes.rows) {
+            const cantidadIngresada = parseFloat(detalle.cantidad_recibida);
+
+            const loteRes = await client.query(`
+                SELECT id_lote, cantidad_disponible 
+                FROM lote_refaccion 
+                WHERE id_detalle_entrada = $1
+            `, [detalle.id_detalle_entrada]);
+
+            for (const lote of loteRes.rows) {
+                const cantidadDisponibleEnLote = parseFloat(lote.cantidad_disponible);
+
+                // REGLA DE ORO: Si ya se usó algo del lote, bloqueamos
+                if (cantidadDisponibleEnLote < cantidadIngresada) {
+                    throw new Error(`¡Bloqueo de Seguridad! Parte de las refacciones de esta entrada ya fueron utilizadas. (Stock comprometido)`);
+                }
+                
+                // Si es seguro, eliminamos el lote (esto resta el stock indirectamente)
+                await client.query(`DELETE FROM lote_refaccion WHERE id_lote = $1`, [lote.id_lote]);
+            }
+        }
+
+        // ==========================================
+        // 2B. REVERTIR INSUMOS (Tabla: detalle_entrada_insumo)
+        // ==========================================
+        const detallesInsumoRes = await client.query(`
+            SELECT id_insumo, cantidad_recibida 
+            FROM detalle_entrada_insumo 
+            WHERE id_entrada = $1
+        `, [id]);
+
+        for (const detalle of detallesInsumoRes.rows) {
+            const cantidadIngresada = parseFloat(detalle.cantidad_recibida);
+
+            const insumoRes = await client.query(`
+                SELECT stock_actual, nombre 
+                FROM insumo 
+                WHERE id_insumo = $1 FOR UPDATE
+            `, [detalle.id_insumo]);
+
+            if (insumoRes.rows.length > 0) {
+                const insumo = insumoRes.rows[0];
+                const stockActual = parseFloat(insumo.stock_actual);
+
+                // REGLA DE ORO: Si restar el insumo nos deja en negativo, bloqueamos
+                if (stockActual < cantidadIngresada) {
+                    throw new Error(`¡Bloqueo de Seguridad! El insumo '${insumo.nombre}' ya fue utilizado. Stock insuficiente para cancelar.`);
+                }
+
+                // Si es seguro, restamos el stock de la tabla maestra de insumos
+                await client.query(`
+                    UPDATE insumo 
+                    SET stock_actual = stock_actual - $1 
+                    WHERE id_insumo = $2
+                `, [cantidadIngresada, detalle.id_insumo]);
+            }
+        }
+
+        // ==========================================
+        // 3. ACTUALIZAR ESTADO DE LA ENTRADA
+        // ==========================================
+        const nuevasObservaciones = `${entradaInfo.observaciones ? entradaInfo.observaciones + ' | ' : ''}ANULADA: ${motivo}`;
+        
+        await client.query(`
+            UPDATE entrada_almacen 
+            SET estado = 'CANCELADO', observaciones = $1 
+            WHERE id_entrada = $2
+        `, [nuevasObservaciones, id]);
+
+        await client.query('COMMIT'); 
+        res.status(200).json({ message: 'Entrada anulada correctamente. El inventario ha sido recalculado.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK'); 
+        console.error('Error al cancelar entrada:', error);
+        res.status(400).json({ message: error.message || 'Error al procesar la cancelación.' });
+    } finally {
+        client.release();
+    }
 });
 module.exports = router;
