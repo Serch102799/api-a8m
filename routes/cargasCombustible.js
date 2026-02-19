@@ -173,13 +173,16 @@ router.get('/detalle/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista'
                 cc.desviacion_km,
                 cc.km_esperados,
                 cc.motivo_desviacion,
+                cc.id_tanque,
                 a.economico,
                 o.nombre_completo as nombre_operador,
-                d.nombre as nombre_despachador
+                d.nombre as nombre_despachador,
+                t.nombre_tanque
             FROM cargas_combustible cc
             LEFT JOIN autobus a ON cc.id_autobus = a.id_autobus
             LEFT JOIN operadores o ON cc.id_empleado_operador = o.id_operador
             LEFT JOIN empleado d ON cc.id_empleado_despachador = d.id_empleado
+            LEFT JOIN tanques_combustible t ON cc.id_tanque = t.id_tanque
             WHERE cc.id_carga = $1
         `;
 
