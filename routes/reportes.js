@@ -158,40 +158,77 @@ router.get('/:tipoReporte', async (req, res) => {
   const fechaFinStrAutobus = fechaFinAjustadaAutobus.toISOString().split('T')[0];
   
   query = `
+    WITH DetallesUnificados AS (
+      -- 1. REFACCIONES (Usando tu lógica exacta del historial)
+      SELECT 
+        sa.id_autobus,
+        sa.id_salida,
+        sa.fecha_operacion as fecha,
+        'Refacción' as tipo_item,
+        r.nombre,
+        r.marca,
+        (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
+        COALESCE(l.costo_unitario_final, 0) as costo_unitario,
+        ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * COALESCE(l.costo_unitario_final, 0)) as costo_total
+      FROM detalle_salida ds
+      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+      JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+      WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+        AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+
+      UNION ALL
+
+      -- 2. INSUMOS (Usando tu lógica exacta del historial)
+      SELECT 
+        sa.id_autobus,
+        sa.id_salida,
+        sa.fecha_operacion as fecha,
+        'Insumo' as tipo_item,
+        i.nombre,
+        i.marca,
+        (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
+        COALESCE(dsi.costo_al_momento, 0) as costo_unitario,
+        ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * COALESCE(dsi.costo_al_momento, 0)) as costo_total
+      FROM detalle_salida_insumo dsi
+      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+      JOIN insumo i ON dsi.id_insumo = i.id_insumo
+      WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+        AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
+    ),
+    Agrupados AS (
+      -- 3. Agrupar por autobús y crear el JSON de detalles
+      SELECT 
+        id_autobus,
+        COUNT(DISTINCT id_salida) as num_servicios,
+        SUM(costo_total) as costo_total_bus,
+        json_agg(
+          json_build_object(
+            'fecha', fecha,
+            'tipo_item', tipo_item,
+            'nombre', nombre,
+            'marca', marca,
+            'cantidad', cantidad,
+            'costo_unitario', costo_unitario,
+            'costo_total', costo_total
+          ) ORDER BY fecha DESC
+        ) as detalles
+      FROM DetallesUnificados
+      GROUP BY id_autobus
+    )
+    -- 4. Cruce final con el catálogo de autobuses
     SELECT 
       a.id_autobus,
       a.economico,
       a.marca,
       a.modelo,
       a.razon_social,
-      COALESCE(costos.costo_total, 0) as costo_total,
-      COALESCE(costos.num_servicios, 0) as num_servicios
+      COALESCE(ag.costo_total_bus, 0) as costo_total,
+      COALESCE(ag.num_servicios, 0) as num_servicios,
+      COALESCE(ag.detalles, '[]'::json) as detalles
     FROM autobus a
-    LEFT JOIN (
-      SELECT 
-        sa.id_autobus,
-        COUNT(DISTINCT sa.id_salida) as num_servicios,
-        SUM(COALESCE(refacciones_costo, 0) + COALESCE(insumos_costo, 0)) as costo_total
-      FROM salida_almacen sa
-      LEFT JOIN (
-        SELECT 
-          ds.id_salida,
-          SUM((ds.cantidad_despachada - ds.cantidad_devuelta) * l.costo_unitario_final) as refacciones_costo
-        FROM detalle_salida ds
-        JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-        GROUP BY ds.id_salida
-      ) refacciones ON sa.id_salida = refacciones.id_salida
-      LEFT JOIN (
-        SELECT 
-          dsi.id_salida,
-          SUM((dsi.cantidad_usada - dsi.cantidad_devuelta) * dsi.costo_al_momento) as insumos_costo
-        FROM detalle_salida_insumo dsi
-        GROUP BY dsi.id_salida
-      ) insumos ON sa.id_salida = insumos.id_salida
-      WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
-      GROUP BY sa.id_autobus
-    ) costos ON a.id_autobus = costos.id_autobus
-    ORDER BY costos.costo_total DESC NULLS LAST;
+    JOIN Agrupados ag ON a.id_autobus = ag.id_autobus
+    ORDER BY costo_total DESC NULLS LAST;
   `;
   
   params = [fechaInicio, fechaFinStrAutobus];
