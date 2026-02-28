@@ -309,7 +309,7 @@ router.get('/:tipoReporte', async (req, res) => {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
       }
 
-      // 1. Recibimos los IDs como strings separados por comas (ej. "1,5,12")
+      // 1. Recibimos los IDs y los convertimos en arreglos numéricos
       const { idsRefacciones = '', idsInsumos = '' } = req.query;
       
       const arrRefacciones = idsRefacciones ? idsRefacciones.split(',').map(id => parseInt(id)) : [];
@@ -323,12 +323,8 @@ router.get('/:tipoReporte', async (req, res) => {
       fechaFinAjustadaEsp.setDate(fechaFinAjustadaEsp.getDate() + 1);
       const fechaFinStrEsp = fechaFinAjustadaEsp.toISOString().split('T')[0];
 
-      // Construimos condiciones dinámicas dependiendo de si enviaron refacciones, insumos o ambos
-      let condicionRefaccionesEntrada = arrRefacciones.length > 0 ? `AND de.id_refaccion = ANY($3::int[])` : `AND FALSE`;
-      let condicionRefaccionesSalida = arrRefacciones.length > 0 ? `AND ds.id_refaccion = ANY($3::int[])` : `AND FALSE`;
-      let condicionInsumosEntrada = arrInsumos.length > 0 ? `AND dei.id_insumo = ANY($4::int[])` : `AND FALSE`;
-      let condicionInsumosSalida = arrInsumos.length > 0 ? `AND dsi.id_insumo = ANY($4::int[])` : `AND FALSE`;
-
+      // Consulta SQL con los parámetros $3 y $4 fijos. 
+      // Si los arreglos van vacíos, PostgreSQL evalúa el ANY() como falso automáticamente.
       query = `
         WITH Movimientos AS (
           -- 1. ENTRADAS REFACCIONES
@@ -342,7 +338,8 @@ router.get('/:tipoReporte', async (req, res) => {
           JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
           JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
           JOIN refaccion r ON de.id_refaccion = r.id_refaccion
-          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 ${condicionRefaccionesEntrada}
+          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 
+            AND de.id_refaccion = ANY($3::int[])
 
           UNION ALL
 
@@ -359,7 +356,8 @@ router.get('/:tipoReporte', async (req, res) => {
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
           JOIN autobus a ON sa.id_autobus = a.id_autobus
           WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 
-            AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 ${condicionRefaccionesSalida}
+            AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 
+            AND ds.id_refaccion = ANY($3::int[])
 
           UNION ALL
 
@@ -373,7 +371,8 @@ router.get('/:tipoReporte', async (req, res) => {
           FROM detalle_entrada_insumo dei
           JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
           JOIN insumo i ON dei.id_insumo = i.id_insumo
-          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 ${condicionInsumosEntrada}
+          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 
+            AND dei.id_insumo = ANY($4::int[])
 
           UNION ALL
 
@@ -389,9 +388,9 @@ router.get('/:tipoReporte', async (req, res) => {
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
           JOIN autobus a ON sa.id_autobus = a.id_autobus
           WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 
-            AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0 ${condicionInsumosSalida}
+            AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0 
+            AND dsi.id_insumo = ANY($4::int[])
         )
-        -- Agrupamos todo creando la estructura maestra y el JSON de detalles
         SELECT 
           tipo_articulo,
           id_item,
@@ -413,9 +412,10 @@ router.get('/:tipoReporte', async (req, res) => {
         ORDER BY tipo_articulo, nombre ASC;
       `;
       
+      // Siempre pasamos exactamente los 4 parámetros esperados en la consulta
       params = [fechaInicio, fechaFinStrEsp, arrRefacciones, arrInsumos];
       break;
-      
+
     case 'gastos-totales':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
