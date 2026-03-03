@@ -80,9 +80,7 @@ router.get('/:idAutobus', async (req, res) => {
             r.marca,
             (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
             e.nombre as solicitado_por,
-            -- Agregamos Costo Unitario
             COALESCE(l.costo_unitario_final, 0) as costo_unitario,
-            -- Calculamos Costo Total
             ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * COALESCE(l.costo_unitario_final, 0)) as costo_total
           FROM detalle_salida ds
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
@@ -102,50 +100,76 @@ router.get('/:idAutobus', async (req, res) => {
             i.marca,
             (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
             e.nombre as solicitado_por,
-            -- Agregamos Costo Unitario (Histórico)
             COALESCE(dsi.costo_al_momento, 0) as costo_unitario,
-            -- Calculamos Costo Total
             ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * COALESCE(dsi.costo_al_momento, 0)) as costo_total
           FROM detalle_salida_insumo dsi
           JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
           JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
           WHERE sa.id_autobus = $1
+
+          UNION ALL
+
+          -- 3. SERVICIOS EXTERNOS
+          SELECT
+            se.fecha_servicio as fecha,
+            se.kilometraje_autobus as kilometraje,
+            'Serv. Externo' as tipo_item,
+            se.descripcion as nombre,
+            COALESCE(p.nombre_proveedor, 'Taller Externo') as marca,
+            1 as cantidad,
+            e.nombre as solicitado_por,
+            se.costo_total as costo_unitario,
+            se.costo_total as costo_total
+          FROM servicio_externo se
+          LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
+          JOIN empleado e ON se.registrado_por_id = e.id_empleado
+          WHERE se.id_autobus = $1 AND se.estatus = 'Activo'
        ) as movimientos
        ORDER BY fecha DESC`,
       [idAutobus]
     );
 
     const costoTotalPromise = pool.query(
-  `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
-      -- Costos de REFACCIONES (calcula sobre la cantidad neta)
-      SELECT 
-        SUM((ds.cantidad_despachada - ds.cantidad_devuelta) * l.costo_unitario_final) as costo_total
-      FROM detalle_salida ds
-      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-      WHERE sa.id_autobus = $1
+      `SELECT COALESCE(SUM(costo_total), 0) as costo_total FROM (
+          -- Costos de REFACCIONES 
+          SELECT 
+            SUM((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+          WHERE sa.id_autobus = $1
 
-      UNION ALL
+          UNION ALL
 
-      -- Costos de INSUMOS (calcula sobre la cantidad neta)
-      SELECT 
-        SUM((dsi.cantidad_usada - dsi.cantidad_devuelta) * dsi.costo_al_momento) as costo_total
-      FROM detalle_salida_insumo dsi
-      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
-      WHERE sa.id_autobus = $1
-  ) as costos`,
-  [idAutobus]
-);
+          -- Costos de INSUMOS
+          SELECT 
+            SUM((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          FROM detalle_salida_insumo dsi
+          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+          WHERE sa.id_autobus = $1
+
+          UNION ALL
+
+          -- Costos de SERVICIOS EXTERNOS
+          SELECT 
+            SUM(costo_total) as costo_total
+          FROM servicio_externo
+          WHERE id_autobus = $1 AND estatus = 'Activo'
+      ) as costos`,
+      [idAutobus]
+    );
 
     const [historialResult, costoTotalResult] = await Promise.all([
       historialPromise,
       costoTotalPromise,
     ]);
     
+    // Aproveché para sanear bien el formateo de los floats
     const historialFormateado = historialResult.rows.map(item => ({
         ...item,
-        costo: parseFloat(item.costo || 0)
+        costo_unitario: parseFloat(item.costo_unitario || 0),
+        costo_total: parseFloat(item.costo_total || 0)
     }));
 
     res.json({
@@ -154,8 +178,8 @@ router.get('/:idAutobus', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ message: 'Error en el servidor' });
+    console.error('Error al obtener historial del autobús:', error);
+    res.status(500).json({ message: 'Error en el servidor al cargar historial' });
   }
 });
 

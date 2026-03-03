@@ -35,6 +35,7 @@ const rendiminetosRouter = require('./routes/rendimientos');
 const ajusteInventario = require('./routes/ajusteInventario');
 const conteoInventario = require('./routes/conteoInventario');
 const prestamosRoutes = require('./routes/prestamos');
+const serviciosExternosRouter = require('./routes/serviciosExternos');
 
 
 const app = express();
@@ -93,6 +94,7 @@ app.use('/api/rendimientos', rendiminetosRouter);
 app.use('/api/ajuste-inventario', ajusteInventario);
 app.use('/api/conteo-inventario', conteoInventario);
 app.use('/api/prestamos', prestamosRoutes);
+app.use('/api/servicios-externos', serviciosExternosRouter);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {

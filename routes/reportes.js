@@ -158,81 +158,160 @@ router.get('/:tipoReporte', async (req, res) => {
   const fechaFinStrAutobus = fechaFinAjustadaAutobus.toISOString().split('T')[0];
   
   query = `
-    WITH DetallesUnificados AS (
-      -- 1. REFACCIONES (Usando tu lógica exacta del historial)
-      SELECT 
-        sa.id_autobus,
-        sa.id_salida,
-        sa.fecha_operacion as fecha,
-        'Refacción' as tipo_item,
-        r.nombre,
-        r.marca,
-        (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
-        COALESCE(l.costo_unitario_final, 0) as costo_unitario,
-        ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * COALESCE(l.costo_unitario_final, 0)) as costo_total
-      FROM detalle_salida ds
-      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-      JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
-      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-      WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
-        AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+        WITH Gastos AS (
+          -- 1. SALIDAS DE REFACCIONES
+          SELECT 
+            sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, 
+            r.nombre, r.marca, 
+            (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, 
+            l.costo_unitario_final as costo_unitario, 
+            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds
+          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+          JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+            AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
 
-      UNION ALL
+          UNION ALL
 
-      -- 2. INSUMOS (Usando tu lógica exacta del historial)
-      SELECT 
-        sa.id_autobus,
-        sa.id_salida,
-        sa.fecha_operacion as fecha,
-        'Insumo' as tipo_item,
-        i.nombre,
-        i.marca,
-        (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
-        COALESCE(dsi.costo_al_momento, 0) as costo_unitario,
-        ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * COALESCE(dsi.costo_al_momento, 0)) as costo_total
-      FROM detalle_salida_insumo dsi
-      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
-      JOIN insumo i ON dsi.id_insumo = i.id_insumo
-      WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
-        AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
-    ),
-    Agrupados AS (
-      -- 3. Agrupar por autobús y crear el JSON de detalles
-      SELECT 
-        id_autobus,
-        COUNT(DISTINCT id_salida) as num_servicios,
-        SUM(costo_total) as costo_total_bus,
-        json_agg(
-          json_build_object(
-            'fecha', fecha,
-            'tipo_item', tipo_item,
-            'nombre', nombre,
-            'marca', marca,
-            'cantidad', cantidad,
-            'costo_unitario', costo_unitario,
-            'costo_total', costo_total
-          ) ORDER BY fecha DESC
-        ) as detalles
-      FROM DetallesUnificados
-      GROUP BY id_autobus
-    )
-    -- 4. Cruce final con el catálogo de autobuses
-    SELECT 
-      a.id_autobus,
-      a.economico,
-      a.marca,
-      a.modelo,
-      a.razon_social,
-      COALESCE(ag.costo_total_bus, 0) as costo_total,
-      COALESCE(ag.num_servicios, 0) as num_servicios,
-      COALESCE(ag.detalles, '[]'::json) as detalles
-    FROM autobus a
-    JOIN Agrupados ag ON a.id_autobus = ag.id_autobus
-    ORDER BY costo_total DESC NULLS LAST;
-  `;
+          -- 2. SALIDAS DE INSUMOS
+          SELECT 
+            sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, 
+            i.nombre, i.marca, 
+            (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, 
+            dsi.costo_al_momento as costo_unitario, 
+            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          FROM detalle_salida_insumo dsi
+          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+          JOIN insumo i ON dsi.id_insumo = i.id_insumo
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+            AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
+
+          UNION ALL
+
+          -- 3. NUEVO: SERVICIOS EXTERNOS
+          SELECT 
+            se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, 
+            se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 
+            1 as cantidad, -- Es 1 servicio
+            se.costo_total as costo_unitario, 
+            se.costo_total as costo_total
+          FROM servicio_externo se
+          LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2
+            AND se.estatus = 'Activo' -- Solo sumamos los que no están cancelados
+        )
+        -- Agrupamos por autobús
+        SELECT 
+          a.id_autobus,
+          a.economico as autobus,
+          SUM(g.costo_total) as costo_total_mantenimiento,
+          json_agg(
+            json_build_object(
+              'fecha', g.fecha,
+              'tipo_item', g.tipo_item,
+              'nombre', g.nombre,
+              'marca', g.marca,
+              'cantidad', g.cantidad,
+              'costo_unitario', g.costo_unitario,
+              'costo_total', g.costo_total
+            ) ORDER BY g.fecha DESC
+          ) as detalles
+        FROM Gastos g
+        JOIN autobus a ON g.id_autobus = a.id_autobus
+        GROUP BY a.id_autobus, a.economico
+        ORDER BY costo_total_mantenimiento DESC;
+      `;
   
   params = [fechaInicio, fechaFinStrAutobus];
   break;
+  case 'costo-por-autobus-especifico':
+      if (!fechaInicio || !fechaFin) {
+        return res.status(400).json({ message: 'Se requiere un rango de fechas.' });
+      }
+
+      const { idsAutobuses = '' } = req.query;
+      const arrBuses = idsAutobuses ? idsAutobuses.split(',').map(id => parseInt(id)) : [];
+
+      if (arrBuses.length === 0) {
+        return res.status(400).json({ message: 'Debes seleccionar al menos un autobús.' });
+      }
+
+      const fechaFinAjustadaBus = new Date(fechaFin);
+      fechaFinAjustadaBus.setDate(fechaFinAjustadaBus.getDate() + 1);
+      const fechaFinStrBus = fechaFinAjustadaBus.toISOString().split('T')[0];
+
+      query = `
+        WITH Gastos AS (
+          -- 1. REFACCIONES
+          SELECT 
+            sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, 
+            r.nombre, r.marca, 
+            (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, 
+            l.costo_unitario_final as costo_unitario, 
+            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds
+          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+          JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+            AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+            AND sa.id_autobus = ANY($3::int[])
+
+          UNION ALL
+
+          -- 2. INSUMOS
+          SELECT 
+            sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, 
+            i.nombre, i.marca, 
+            (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, 
+            dsi.costo_al_momento as costo_unitario, 
+            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          FROM detalle_salida_insumo dsi
+          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+          JOIN insumo i ON dsi.id_insumo = i.id_insumo
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
+            AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
+            AND sa.id_autobus = ANY($3::int[])
+
+          UNION ALL
+
+          -- 3. SERVICIOS EXTERNOS
+          SELECT 
+            se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, 
+            se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 
+            1 as cantidad, 
+            se.costo_total as costo_unitario, 
+            se.costo_total as costo_total
+          FROM servicio_externo se
+          LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2
+            AND se.estatus = 'Activo'
+            AND se.id_autobus = ANY($3::int[])
+        )
+        SELECT 
+          a.id_autobus,
+          a.economico as autobus,
+          SUM(g.costo_total) as costo_total_mantenimiento,
+          json_agg(
+            json_build_object(
+              'fecha', g.fecha,
+              'tipo_item', g.tipo_item,
+              'nombre', g.nombre,
+              'marca', g.marca,
+              'cantidad', g.cantidad,
+              'costo_unitario', g.costo_unitario,
+              'costo_total', g.costo_total
+            ) ORDER BY g.fecha DESC
+          ) as detalles
+        FROM Gastos g
+        JOIN autobus a ON g.id_autobus = a.id_autobus
+        GROUP BY a.id_autobus, a.economico
+        ORDER BY costo_total_mantenimiento DESC;
+      `;
+      params = [fechaInicio, fechaFinStrBus, arrBuses];
+      break;
   case 'movimientos-refaccion':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
