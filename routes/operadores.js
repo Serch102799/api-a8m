@@ -180,7 +180,7 @@ router.get('/', verifyToken, async (req, res) => {
  *       500:
  *         description: Error interno del servidor
  */
-router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { 
         nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
         numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
@@ -274,7 +274,7 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req
  *       500:
  *         description: Error interno del servidor
  */
-router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
     // Quitamos 'estatus' del body, ya no se gestiona aquí
     const { 
@@ -335,7 +335,7 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (r
  *       500:
  *         description: Error interno del servidor
  */
-router.patch('/:id/desactivar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.patch('/:id/desactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
     const { fecha_baja, motivo_baja } = req.body;
 
@@ -360,7 +360,7 @@ router.patch('/:id/desactivar', [verifyToken, checkRole(['Admin', 'SuperUsuario'
         res.status(500).json({ message: 'Error al desactivar el operador' });
     }
 });
-router.patch('/:id/reactivar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async (req, res) => {
+router.patch('/:id/reactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
 
     try {
