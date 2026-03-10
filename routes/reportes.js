@@ -202,10 +202,12 @@ router.get('/:tipoReporte', async (req, res) => {
           WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2
             AND se.estatus = 'Activo' -- Solo sumamos los que no están cancelados
         )
-        -- Agrupamos por autobús
+        -- Agrupamos por autobús (AGREGAMOS MARCA Y MODELO AQUÍ)
         SELECT 
           a.id_autobus,
           a.economico as autobus,
+          a.marca as marca_autobus, 
+          a.modelo as modelo_autobus,
           SUM(g.costo_total) as costo_total_mantenimiento,
           json_agg(
             json_build_object(
@@ -220,12 +222,13 @@ router.get('/:tipoReporte', async (req, res) => {
           ) as detalles
         FROM Gastos g
         JOIN autobus a ON g.id_autobus = a.id_autobus
-        GROUP BY a.id_autobus, a.economico
+        GROUP BY a.id_autobus, a.economico, a.marca, a.modelo
         ORDER BY costo_total_mantenimiento DESC;
       `;
   
   params = [fechaInicio, fechaFinStrAutobus];
   break;
+
   case 'costo-por-autobus-especifico':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas.' });
@@ -290,9 +293,12 @@ router.get('/:tipoReporte', async (req, res) => {
             AND se.estatus = 'Activo'
             AND se.id_autobus = ANY($3::int[])
         )
+        -- Agrupamos por autobús (AGREGAMOS MARCA Y MODELO AQUÍ)
         SELECT 
           a.id_autobus,
           a.economico as autobus,
+          a.marca as marca_autobus,
+          a.modelo as modelo_autobus,
           SUM(g.costo_total) as costo_total_mantenimiento,
           json_agg(
             json_build_object(
@@ -307,11 +313,12 @@ router.get('/:tipoReporte', async (req, res) => {
           ) as detalles
         FROM Gastos g
         JOIN autobus a ON g.id_autobus = a.id_autobus
-        GROUP BY a.id_autobus, a.economico
+        GROUP BY a.id_autobus, a.economico, a.marca, a.modelo
         ORDER BY costo_total_mantenimiento DESC;
       `;
       params = [fechaInicio, fechaFinStrBus, arrBuses];
       break;
+      
   case 'movimientos-refaccion':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
