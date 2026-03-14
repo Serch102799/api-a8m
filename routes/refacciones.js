@@ -62,29 +62,36 @@ router.get('/', verifyToken, async (req, res) => {
         const offset = (page - 1) * limit;
 
         const dataQuery = `
-            SELECT
-                r.*,
-                COALESCE(s.stock_actual, 0) AS stock_actual,
-                lc.ultimo_costo
-            FROM
-                refaccion r
-            LEFT JOIN (
-                SELECT id_refaccion, SUM(cantidad_disponible) as stock_actual
-                FROM lote_refaccion
-                GROUP BY id_refaccion
-            ) s ON r.id_refaccion = s.id_refaccion
-            LEFT JOIN (
-                SELECT DISTINCT ON (l.id_refaccion) 
-                    l.id_refaccion, 
-                    l.costo_unitario_final as ultimo_costo
-                FROM lote_refaccion l
-                JOIN detalle_entrada de ON l.id_detalle_entrada = de.id_detalle_entrada
-                ORDER BY l.id_refaccion, de.id_entrada DESC
-            ) lc ON r.id_refaccion = lc.id_refaccion
-            ${whereString}
-            ORDER BY ${sortColumn} ${sortDirection}
-            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-        `;
+    SELECT 
+        r.*,
+        
+        -- 1. Calcular el Stock Actual sumando lo disponible en todos los lotes
+        COALESCE(
+            (SELECT SUM(l.cantidad_disponible) 
+             FROM lote_refaccion l 
+             WHERE l.id_refaccion = r.id_refaccion), 
+        0) as stock_actual,
+
+        -- 2. Obtener el Último Costo (El precio del lote más reciente)
+        COALESCE(
+            (SELECT l.costo_unitario_final 
+             FROM lote_refaccion l 
+             WHERE l.id_refaccion = r.id_refaccion 
+             ORDER BY l.fecha_ingreso DESC, l.id_lote DESC 
+             LIMIT 1), 
+        0) as ultimo_costo,
+
+        -- 3. Calcular el Precio Unitario (Costo Promedio Ponderado)
+        COALESCE(
+            (SELECT SUM(l.cantidad_disponible * l.costo_unitario_final) / NULLIF(SUM(l.cantidad_disponible), 0) 
+             FROM lote_refaccion l 
+             WHERE l.id_refaccion = r.id_refaccion AND l.cantidad_disponible > 0), 
+        0) as precio_costo
+
+    FROM refaccion r
+    ORDER BY r.nombre ASC
+    LIMIT $1 OFFSET $2;
+`;
         
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
         
