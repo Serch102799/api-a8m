@@ -59,6 +59,7 @@ router.get('/', verifyToken, async (req, res) => {
 // ============================================
 router.get('/inventario-global', verifyToken, async (req, res) => {
     const { search = '', page = 1, limit = 10 } = req.query;
+    
     try {
         const searchTerm = `%${search}%`;
         const offset = (page - 1) * limit;
@@ -66,25 +67,46 @@ router.get('/inventario-global', verifyToken, async (req, res) => {
         const baseQuery = `
             WITH inventario_unificado AS (
                 -- 1. REFACCIONES
-                SELECT r.id_refaccion as id, r.nombre, r.marca, 'Refacción' as tipo, 
-                COALESCE((SELECT SUM(l.cantidad_disponible) FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion), 0) as stock_actual,
-                r.unidad_medida as unidad, r.numero_parte, r.categoria,
-                COALESCE((SELECT l.costo_unitario_final FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion ORDER BY l.fecha_ingreso DESC, l.id_lote DESC LIMIT 1), 0) as ultimo_costo
+                SELECT 
+                    r.id_refaccion as id, 
+                    r.nombre, 
+                    COALESCE(r.marca, '') as marca, -- Blindaje contra nulos
+                    'Refacción' as tipo, 
+                    COALESCE((SELECT SUM(l.cantidad_disponible) FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion), 0) as stock_actual,
+                    r.unidad_medida as unidad, 
+                    COALESCE(r.numero_parte, '') as numero_parte, -- Blindaje contra nulos
+                    r.categoria,
+                    COALESCE((SELECT l.costo_unitario_final FROM lote_refaccion l WHERE l.id_refaccion = r.id_refaccion ORDER BY l.fecha_ingreso DESC, l.id_lote DESC LIMIT 1), 0) as ultimo_costo
                 FROM refaccion r
+                
                 UNION ALL
+                
                 -- 2. INSUMOS
-                SELECT id_insumo as id, nombre, marca, 'Insumo' as tipo, stock_actual, unidad_medida as unidad, '---' as numero_parte, tipo_insumo::text as categoria,
-                COALESCE(costo_unitario_promedio, 0) as ultimo_costo -- AQUI USAMOS EL NOMBRE CORRECTO
+                SELECT 
+                    id_insumo as id, 
+                    nombre, 
+                    COALESCE(marca, '') as marca, -- Blindaje contra nulos
+                    'Insumo' as tipo, 
+                    stock_actual, 
+                    unidad_medida as unidad, 
+                    '---' as numero_parte, 
+                    tipo_insumo::text as categoria,
+                    COALESCE(costo_unitario_promedio, 0) as ultimo_costo
                 FROM insumo
             )
-            SELECT * FROM inventario_unificado WHERE nombre ILIKE $1 OR marca ILIKE $1 OR numero_parte ILIKE $1
+            SELECT * FROM inventario_unificado 
+            WHERE nombre ILIKE $1 
+               OR marca ILIKE $1 
+               OR numero_parte ILIKE $1
         `;
 
         const countResult = await pool.query(`SELECT COUNT(*) FROM (${baseQuery}) as total`, [searchTerm]);
         const totalItems = parseInt(countResult.rows[0].count, 10);
+        
         const dataResult = await pool.query(`${baseQuery} ORDER BY nombre ASC LIMIT $2 OFFSET $3`, [searchTerm, limit, offset]);
 
         res.json({ data: dataResult.rows, total: totalItems });
+        
     } catch (error) {
         console.error('Error SQL en inventario-global:', error);
         res.status(500).json({ message: 'Error al obtener inventario global.' });
