@@ -12,8 +12,18 @@ router.use(verifyToken);
  *   name: EntradasAlmacen
  *   description: Gestión de entradas al almacén
  */
-
+router.put('/:id/factura', [verifyToken], async (req, res) => {
+    const { id } = req.params;
+    const { factura_proveedor } = req.body;
+    try {
+        await pool.query('UPDATE entrada_almacen SET factura_proveedor = $1 WHERE id_entrada = $2', [factura_proveedor, id]);
+        res.json({ message: 'Factura actualizada' });
+    } catch (err) {
+        res.status(500).json({ message: 'Error del servidor' });
+    }
+});
 /**
+ * 
  * @swagger
  * /api/entradas:
  *   get:

@@ -166,7 +166,7 @@ router.get('/', verifyToken, async (req, res) => {
  *                   type: string
  *                   example: "Error al procesar la entrada: El insumo con ID 99 no fue encontrado."
  */
-router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
     const { maestro, detalles } = req.body;
     
     if (!maestro || !detalles || !Array.isArray(detalles) || detalles.length === 0) {
