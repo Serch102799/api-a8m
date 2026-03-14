@@ -254,7 +254,7 @@ router.get('/marca/:marca', async (req, res) => {
  *       500:
  *         description: Error en el servidor
  */
-router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
+router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
  
   const {
     Nombre,
