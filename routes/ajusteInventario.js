@@ -124,11 +124,13 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
             diferencia = stock_fisico - stockSistema;
 
             if (diferencia > 0) {
+                // Si sobran piezas físicamente, insertamos el nuevo lote
                 await client.query(
                     `INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final, costo_unitario_subtotal, monto_iva_unitario, fecha_ingreso) VALUES ($1, $2, $3, $4, 0, CURRENT_DATE)`, 
                     [id, diferencia, costo_unitario, (costo_unitario * diferencia)]
                 );
             } else if (diferencia < 0) {
+                // Si faltan piezas físicamente, descontamos de los lotes viejos
                 let cantidadARestar = Math.abs(diferencia);
                 const lotesRes = await client.query(`SELECT id_lote, cantidad_disponible FROM lote_refaccion WHERE id_refaccion = $1 AND cantidad_disponible > 0 ORDER BY id_lote ASC`, [id]);
                 
@@ -141,13 +143,15 @@ router.post('/aplicar', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], asy
                     await client.query(`UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_lote = $2`, [restarDelLote, lote.id_lote]);
                 }
             } else if (diferencia === 0) {
-                 const ultimoLoteRes = await client.query(`SELECT id_lote FROM lote_refaccion WHERE id_refaccion = $1 ORDER BY fecha_ingreso DESC, id_lote DESC LIMIT 1`, [id]);
-                if(ultimoLoteRes.rows.length > 0) {
-                     await client.query(`UPDATE lote_refaccion SET costo_unitario_final = $1 WHERE id_lote = $2`, [costo_unitario, ultimoLoteRes.rows[0].id_lote]);
-                } else {
+                // Si no hay diferencia de stock pero no existía ningún lote, lo creamos en cero para guardar el precio
+                const ultimoLoteRes = await client.query(`SELECT id_lote FROM lote_refaccion WHERE id_refaccion = $1 ORDER BY fecha_ingreso DESC, id_lote DESC LIMIT 1`, [id]);
+                if(ultimoLoteRes.rows.length === 0) {
                      await client.query(`INSERT INTO lote_refaccion (id_refaccion, cantidad_disponible, costo_unitario_final, costo_unitario_subtotal, monto_iva_unitario, fecha_ingreso) VALUES ($1, 0, $2, 0, 0, CURRENT_DATE)`, [id, costo_unitario]);
                 }
             }
+
+            await client.query(`UPDATE lote_refaccion SET costo_unitario_final = $1 WHERE id_refaccion = $2 AND cantidad_disponible > 0`, [costo_unitario, id]);
+            
         }
 
         console.log(`AJUSTE | ${tipo} ID:${id} | Sist: ${stockSistema} -> Fís: ${stock_fisico} | Dif: ${diferencia} | Costo: ${costo_unitario}`);
