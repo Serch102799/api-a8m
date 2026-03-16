@@ -254,6 +254,38 @@ router.get('/marca/:marca', async (req, res) => {
  *       500:
  *         description: Error en el servidor
  */
+router.post('/fusionar', verifyToken, async (req, res) => {
+    const { id_principal, id_duplicado } = req.body;
+
+    if (!id_principal || !id_duplicado || id_principal === id_duplicado) {
+        return res.status(400).json({ message: 'IDs inválidos para la fusión.' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        await client.query('UPDATE lote_refaccion SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
+        
+        await client.query('UPDATE detalle_entrada SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
+        
+        // OJO: Cambia "detalle_salida" por el nombre real de tu tabla de detalles de salida de refacciones.
+        await client.query('UPDATE detalle_salida SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
+
+        await client.query('DELETE FROM refaccion WHERE id_refaccion = $1', [id_duplicado]);
+
+        await client.query('COMMIT');
+        res.status(200).json({ message: 'Fusión completada con éxito. El historial se ha unificado.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error en la fusión:', error);
+        res.status(500).json({ message: 'Error interno al fusionar los artículos.', error: error.message });
+    } finally {
+        client.release();
+    }
+});
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
  
   const {
