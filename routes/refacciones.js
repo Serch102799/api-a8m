@@ -477,26 +477,47 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
  *       500:
  *         description: Error en el servidor
  */
-router.delete('/:id', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario'])], async (req, res) => {
-  const { id } = req.params;
+// =======================================================
+// ELIMINAR REFACCIÓN (CON BORRADO EN CASCADA SEGURO)
+// =======================================================
+router.delete('/:id', verifyToken, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
 
-  try {
-    const result = await pool.query(
-      'DELETE FROM refaccion WHERE id_refaccion = $1 RETURNING *',
-      [id]
-    );
+    try {
+        await client.query('BEGIN'); // Iniciamos transacción segura
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Refacción no encontrada' });
+        // 1. Borrar de las salidas (si alguien sacó piezas de este lote)
+        await client.query(`
+            DELETE FROM detalle_salida 
+            WHERE id_lote IN (SELECT id_lote FROM lote_refaccion WHERE id_refaccion = $1)
+        `, [id]);
+
+        // 2. Borrar de las entradas (si hubo historial de compras)
+        await client.query('DELETE FROM detalle_entrada WHERE id_refaccion = $1', [id]);
+
+        // 3. Borrar el stock (Lotes)
+        await client.query('DELETE FROM lote_refaccion WHERE id_refaccion = $1', [id]);
+
+        // 4. Finalmente, borrar del catálogo de refacciones
+        const result = await client.query('DELETE FROM refaccion WHERE id_refaccion = $1 RETURNING *', [id]);
+
+        if (result.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Refacción no encontrada.' });
+        }
+
+        await client.query('COMMIT'); // Guardamos los cambios
+        res.status(200).json({ message: 'Refacción y todo su historial eliminados correctamente.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK'); // Si algo falla, cancelamos todo para no romper la BD
+        console.error('Error al eliminar refacción:', error);
+        res.status(500).json({ message: 'Error interno al eliminar la refacción.', error: error.message });
+    } finally {
+        client.release();
     }
-
-    res.json({ message: 'Refacción eliminada correctamente', refaccion: result.rows[0] });
-  } catch (error) {
-    console.error('Error al eliminar la refacción:', error);
-    res.status(500).json({ message: 'Error al eliminar la refacción' });
-  }
 });
-
 /**
  * @swagger
  * /api/refacciones/buscar:
