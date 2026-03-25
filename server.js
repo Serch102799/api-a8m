@@ -38,6 +38,7 @@ const prestamosRoutes = require('./routes/prestamos');
 const serviciosExternosRouter = require('./routes/serviciosExternos');
 const ticketsRouter = require('./routes/tickets');
 const dashboardRrhhRouter = require('./routes/dashboard-rrhh');
+const recuperadosRouter = require('./routes/recuperados');
 
 const app = express();
 
@@ -98,6 +99,7 @@ app.use('/api/prestamos', prestamosRoutes);
 app.use('/api/servicios-externos', serviciosExternosRouter);
 app.use('/api/tickets', ticketsRouter);
 app.use('/api/dashboard-rrhh', dashboardRrhhRouter);
+app.use('/api/recuperados', recuperadosRouter);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {

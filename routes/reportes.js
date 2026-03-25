@@ -1,105 +1,9 @@
-
 const express = require('express');
 const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 
 router.use(verifyToken);
-
-/**
- * @swagger
- * /api/reportes/{tipoReporte}:
- *   get:
- *     summary: Genera diferentes tipos de reportes de refacciones
- *     description: Genera reportes según el tipo solicitado. Algunos tipos requieren rango de fechas.
- *     tags: [Reportes]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: tipoReporte
- *         required: true
- *         schema:
- *           type: string
- *           enum: [stock-bajo, mas-utilizadas, menos-utilizadas, costo-por-autobus]
- *         description: Tipo de reporte a generar
- *       - in: query
- *         name: fechaInicio
- *         schema:
- *           type: string
- *           format: date-time
- *         description: Fecha de inicio del periodo (requerida para ciertos reportes)
- *       - in: query
- *         name: fechaFin
- *         schema:
- *           type: string
- *           format: date-time
- *         description: Fecha de fin del periodo (requerida para ciertos reportes)
- *     responses:
- *       200:
- *         description: Reporte generado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               oneOf:
- *                 - type: array
- *                   description: Para `stock-bajo`
- *                   items:
- *                     type: object
- *                     properties:
- *                       nombre:
- *                         type: string
- *                       numero_parte:
- *                         type: string
- *                       marca:
- *                         type: string
- *                       stock_minimo:
- *                         type: integer
- *                       stock_actual:
- *                         type: integer
- *                 - type: array
- *                   description: Para `mas-utilizadas` y `menos-utilizadas`
- *                   items:
- *                     type: object
- *                     properties:
- *                       nombre:
- *                         type: string
- *                       marca:
- *                         type: string
- *                       total_usado:
- *                         type: integer
- *                 - type: array
- *                   description: Para `costo-por-autobus`
- *                   items:
- *                     type: object
- *                     properties:
- *                       economico:
- *                         type: string
- *                       costo_total:
- *                         type: number
- *                         format: float
- *       400:
- *         description: Parámetros inválidos o tipo de reporte no válido
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Tipo de reporte no válido.
- *       500:
- *         description: Error interno del servidor
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Error en el servidor
- */
-
 router.get('/:tipoReporte', async (req, res) => {
   const { tipoReporte } = req.params;
   const { fechaInicio, fechaFin } = req.query;
@@ -149,15 +53,15 @@ router.get('/:tipoReporte', async (req, res) => {
       break;
 
     case 'costo-autobus':
-  if (!fechaInicio || !fechaFin) {
-    return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
-  }
-  
-  const fechaFinAjustadaAutobus = new Date(fechaFin);
-  fechaFinAjustadaAutobus.setDate(fechaFinAjustadaAutobus.getDate() + 1);
-  const fechaFinStrAutobus = fechaFinAjustadaAutobus.toISOString().split('T')[0];
-  
-  query = `
+      if (!fechaInicio || !fechaFin) {
+        return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
+      }
+      
+      const fechaFinAjustadaAutobus = new Date(fechaFin);
+      fechaFinAjustadaAutobus.setDate(fechaFinAjustadaAutobus.getDate() + 1);
+      const fechaFinStrAutobus = fechaFinAjustadaAutobus.toISOString().split('T')[0];
+      
+      query = `
         WITH Gastos AS (
           -- 1. SALIDAS DE REFACCIONES
           SELECT 
@@ -190,19 +94,34 @@ router.get('/:tipoReporte', async (req, res) => {
 
           UNION ALL
 
-          -- 3. NUEVO: SERVICIOS EXTERNOS
+          -- 3. SERVICIOS EXTERNOS
           SELECT 
             se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, 
             se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 
-            1 as cantidad, -- Es 1 servicio
+            1 as cantidad, 
             se.costo_total as costo_unitario, 
             se.costo_total as costo_total
           FROM servicio_externo se
           LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
           WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2
-            AND se.estatus = 'Activo' -- Solo sumamos los que no están cancelados
+            AND se.estatus = 'Activo'
+
+          UNION ALL
+
+          -- 4. NUEVO: PIEZAS RECUPERADAS (CASCOS)
+          SELECT 
+            pr.id_autobus_destino as id_autobus, pr.fecha_instalacion as fecha, 'Pieza Recuperada' as tipo_item, 
+            r.nombre, r.marca, 
+            1 as cantidad, 
+            pr.costo_reparacion as costo_unitario, 
+            pr.costo_reparacion as costo_total
+          FROM pieza_recuperada pr
+          JOIN refaccion r ON pr.id_refaccion = r.id_refaccion
+          WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2
+            AND pr.estado = 'Instalada'
+            AND pr.costo_reparacion > 0
         )
-        -- Agrupamos por autobús (AGREGAMOS MARCA Y MODELO AQUÍ)
+        -- Agrupamos por autobús
         SELECT 
           a.id_autobus,
           a.economico as autobus,
@@ -225,11 +144,10 @@ router.get('/:tipoReporte', async (req, res) => {
         GROUP BY a.id_autobus, a.economico, a.marca, a.modelo
         ORDER BY costo_total_mantenimiento DESC;
       `;
-  
-  params = [fechaInicio, fechaFinStrAutobus];
-  break;
+      params = [fechaInicio, fechaFinStrAutobus];
+      break;
 
-  case 'costo-por-autobus-especifico':
+    case 'costo-por-autobus-especifico':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas.' });
       }
@@ -247,70 +165,38 @@ router.get('/:tipoReporte', async (req, res) => {
 
       query = `
         WITH Gastos AS (
-          -- 1. REFACCIONES
-          SELECT 
-            sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, 
-            r.nombre, r.marca, 
-            (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, 
-            l.costo_unitario_final as costo_unitario, 
-            ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
           FROM detalle_salida ds
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
           JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
-          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
-            AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
-            AND sa.id_autobus = ANY($3::int[])
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND sa.id_autobus = ANY($3::int[])
 
           UNION ALL
 
-          -- 2. INSUMOS
-          SELECT 
-            sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, 
-            i.nombre, i.marca, 
-            (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, 
-            dsi.costo_al_momento as costo_unitario, 
-            ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, i.nombre, i.marca, (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, dsi.costo_al_momento as costo_unitario, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
           FROM detalle_salida_insumo dsi
           JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
-          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2
-            AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
-            AND sa.id_autobus = ANY($3::int[])
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0 AND sa.id_autobus = ANY($3::int[])
 
           UNION ALL
 
-          -- 3. SERVICIOS EXTERNOS
-          SELECT 
-            se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, 
-            se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 
-            1 as cantidad, 
-            se.costo_total as costo_unitario, 
-            se.costo_total as costo_total
+          SELECT se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 1 as cantidad, se.costo_total as costo_unitario, se.costo_total as costo_total
           FROM servicio_externo se
           LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
-          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2
-            AND se.estatus = 'Activo'
-            AND se.id_autobus = ANY($3::int[])
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo' AND se.id_autobus = ANY($3::int[])
+
+          UNION ALL
+
+          -- 4. NUEVO: PIEZAS RECUPERADAS
+          SELECT pr.id_autobus_destino as id_autobus, pr.fecha_instalacion as fecha, 'Pieza Recuperada' as tipo_item, r.nombre, r.marca, 1 as cantidad, pr.costo_reparacion as costo_unitario, pr.costo_reparacion as costo_total
+          FROM pieza_recuperada pr
+          JOIN refaccion r ON pr.id_refaccion = r.id_refaccion
+          WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0 AND pr.id_autobus_destino = ANY($3::int[])
         )
-        -- Agrupamos por autobús (AGREGAMOS MARCA Y MODELO AQUÍ)
-        SELECT 
-          a.id_autobus,
-          a.economico as autobus,
-          a.marca as marca_autobus,
-          a.modelo as modelo_autobus,
-          SUM(g.costo_total) as costo_total_mantenimiento,
-          json_agg(
-            json_build_object(
-              'fecha', g.fecha,
-              'tipo_item', g.tipo_item,
-              'nombre', g.nombre,
-              'marca', g.marca,
-              'cantidad', g.cantidad,
-              'costo_unitario', g.costo_unitario,
-              'costo_total', g.costo_total
-            ) ORDER BY g.fecha DESC
-          ) as detalles
+        SELECT a.id_autobus, a.economico as autobus, a.marca as marca_autobus, a.modelo as modelo_autobus, SUM(g.costo_total) as costo_total_mantenimiento,
+          json_agg(json_build_object('fecha', g.fecha, 'tipo_item', g.tipo_item, 'nombre', g.nombre, 'marca', g.marca, 'cantidad', g.cantidad, 'costo_unitario', g.costo_unitario, 'costo_total', g.costo_total) ORDER BY g.fecha DESC) as detalles
         FROM Gastos g
         JOIN autobus a ON g.id_autobus = a.id_autobus
         GROUP BY a.id_autobus, a.economico, a.marca, a.modelo
@@ -318,8 +204,8 @@ router.get('/:tipoReporte', async (req, res) => {
       `;
       params = [fechaInicio, fechaFinStrBus, arrBuses];
       break;
-      
-  case 'movimientos-refaccion':
+
+    case 'movimientos-refaccion':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
       }
@@ -390,12 +276,11 @@ router.get('/:tipoReporte', async (req, res) => {
       params = [fechaInicio, fechaFinStrMov];
       break;
 
-      case 'historial-por-refaccion':
+    case 'historial-por-refaccion':
       if (!fechaInicio || !fechaFin) {
         return res.status(400).json({ message: 'Se requiere un rango de fechas para este reporte.' });
       }
 
-      // 1. Recibimos los IDs y los convertimos en arreglos numéricos
       const { idsRefacciones = '', idsInsumos = '' } = req.query;
       
       const arrRefacciones = idsRefacciones ? idsRefacciones.split(',').map(id => parseInt(id)) : [];
@@ -409,8 +294,6 @@ router.get('/:tipoReporte', async (req, res) => {
       fechaFinAjustadaEsp.setDate(fechaFinAjustadaEsp.getDate() + 1);
       const fechaFinStrEsp = fechaFinAjustadaEsp.toISOString().split('T')[0];
 
-      // Consulta SQL con los parámetros $3 y $4 fijos. 
-      // Si los arreglos van vacíos, PostgreSQL evalúa el ANY() como falso automáticamente.
       query = `
         WITH Movimientos AS (
           -- 1. ENTRADAS REFACCIONES
@@ -498,7 +381,6 @@ router.get('/:tipoReporte', async (req, res) => {
         ORDER BY tipo_articulo, nombre ASC;
       `;
       
-      // Siempre pasamos exactamente los 4 parámetros esperados en la consulta
       params = [fechaInicio, fechaFinStrEsp, arrRefacciones, arrInsumos];
       break;
 
@@ -514,94 +396,66 @@ router.get('/:tipoReporte', async (req, res) => {
       try {
         const listaQuery = `
           WITH DetallesUnificados AS (
-            -- 1. Refacciones de la entrada
-            SELECT
-              de.id_entrada,
-              ea.fecha_operacion as fecha,
-              'Refacción' as tipo_item,
-              r.nombre,
-              r.marca,
-              de.cantidad_recibida as cantidad,
-              l.costo_unitario_final as costo_unitario,
-              (de.cantidad_recibida * l.costo_unitario_final) as costo_total
-            FROM detalle_entrada de
-            JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
-            JOIN refaccion r ON l.id_refaccion = r.id_refaccion
-            JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
-            WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
-
+            SELECT de.id_entrada, ea.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, de.cantidad_recibida as cantidad, l.costo_unitario_final as costo_unitario, (de.cantidad_recibida * l.costo_unitario_final) as costo_total
+            FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada JOIN refaccion r ON l.id_refaccion = r.id_refaccion JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
             UNION ALL
-
-            -- 2. Insumos de la entrada
-            SELECT
-              dei.id_entrada,
-              ea.fecha_operacion as fecha,
-              'Insumo' as tipo_item,
-              i.nombre,
-              i.marca,
-              dei.cantidad_recibida as cantidad,
-              dei.costo_unitario_final as costo_unitario,
-              (dei.cantidad_recibida * dei.costo_unitario_final) as costo_total
-            FROM detalle_entrada_insumo dei
-            JOIN insumo i ON dei.id_insumo = i.id_insumo
-            JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
-            WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+            SELECT dei.id_entrada, ea.fecha_operacion as fecha, 'Insumo' as tipo_item, i.nombre, i.marca, dei.cantidad_recibida as cantidad, dei.costo_unitario_final as costo_unitario, (dei.cantidad_recibida * dei.costo_unitario_final) as costo_total
+            FROM detalle_entrada_insumo dei JOIN insumo i ON dei.id_insumo = i.id_insumo JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
           ),
           Agrupados AS (
-            -- 3. Empaquetar todo en formato JSON
-            SELECT
-              id_entrada,
-              SUM(costo_total) as valor_entrada,
-              json_agg(
-                json_build_object(
-                  'fecha', fecha,
-                  'tipo_item', tipo_item,
-                  'nombre', nombre,
-                  'marca', marca,
-                  'cantidad', cantidad,
-                  'costo_unitario', costo_unitario,
-                  'costo_total', costo_total
-                ) ORDER BY tipo_item
+            SELECT id_entrada, SUM(costo_total) as valor_entrada,
+              json_agg(json_build_object('fecha', fecha, 'tipo_item', tipo_item, 'nombre', nombre, 'marca', marca, 'cantidad', cantidad, 'costo_unitario', costo_unitario, 'costo_total', costo_total) ORDER BY tipo_item) as detalles
+            FROM DetallesUnificados GROUP BY id_entrada
+          ),
+          EntradasMaestro AS (
+            -- COMPRAS NORMALES
+            SELECT 
+              ea.id_entrada, ea.fecha_operacion, ea.factura_proveedor, ea.vale_interno, p.nombre_proveedor, e.nombre as recibido_por, ea.razon_social, COALESCE(ag.valor_entrada, 0) AS valor_entrada, COALESCE(ag.detalles, '[]'::json) AS detalles
+            FROM entrada_almacen ea
+            LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+            LEFT JOIN empleado e ON ea.recibido_por_id = e.id_empleado
+            LEFT JOIN Agrupados ag ON ea.id_entrada = ag.id_entrada
+            WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+            
+            UNION ALL
+            
+            -- NUEVO: FACTURAS DE REPARACIÓN DE CASCOS (Simulado como una entrada de dinero)
+            SELECT 
+              (pr.id_pieza_recuperada + 9000000) as id_entrada, -- ID falso alto para evitar choque
+              pr.fecha_retorno as fecha_operacion,
+              pr.factura_reparacion as factura_proveedor,
+              'Reparación Externa' as vale_interno,
+              p.nombre_proveedor,
+              'Taller / Mecánico' as recibido_por,
+              'N/A' as razon_social,
+              pr.costo_reparacion as valor_entrada,
+              json_build_array(
+                json_build_object('fecha', pr.fecha_retorno, 'tipo_item', 'Reparación de Casco', 'nombre', r.nombre, 'marca', r.marca, 'cantidad', 1, 'costo_unitario', pr.costo_reparacion, 'costo_total', pr.costo_reparacion)
               ) as detalles
-            FROM DetallesUnificados
-            GROUP BY id_entrada
+            FROM pieza_recuperada pr
+            JOIN refaccion r ON pr.id_refaccion = r.id_refaccion
+            LEFT JOIN proveedor p ON pr.id_proveedor_reparacion = p.id_proveedor
+            WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2
+              AND pr.estado IN ('Disponible', 'Instalada')
+              AND pr.costo_reparacion > 0
           )
-          -- 4. Consulta final de la tabla maestra
-          SELECT 
-            ea.id_entrada,
-            ea.fecha_operacion,
-            ea.factura_proveedor,
-            ea.vale_interno,
-            p.nombre_proveedor,
-            e.nombre as recibido_por,
-            ea.razon_social,
-            COALESCE(ag.valor_entrada, 0) AS valor_entrada,
-            COALESCE(ag.detalles, '[]'::json) AS detalles
-          FROM entrada_almacen ea
-          LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
-          LEFT JOIN empleado e ON ea.recibido_por_id = e.id_empleado
-          LEFT JOIN Agrupados ag ON ea.id_entrada = ag.id_entrada
-          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
-          ORDER BY ea.fecha_operacion DESC;
+          SELECT * FROM EntradasMaestro ORDER BY fecha_operacion DESC;
         `;
 
         const totalQuery = `
           SELECT COALESCE(SUM(valor_entrada), 0) as total_general
           FROM (
-            SELECT 
-              id_entrada, 
-              SUM(total_linea) as valor_entrada 
+            SELECT id_entrada, SUM(total_linea) as valor_entrada 
             FROM (
               SELECT de.id_entrada, (de.cantidad_recibida * l.costo_unitario_final) as total_linea
-              FROM detalle_entrada de
-              JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
-              JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
-              WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+              FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
               UNION ALL
               SELECT dei.id_entrada, (dei.cantidad_recibida * dei.costo_unitario_final) as total_linea
-              FROM detalle_entrada_insumo dei
-              JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
-              WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+              FROM detalle_entrada_insumo dei JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+              UNION ALL
+              -- Sumar las reparaciones al gasto total
+              SELECT (pr.id_pieza_recuperada + 9000000) as id_entrada, pr.costo_reparacion as total_linea
+              FROM pieza_recuperada pr WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
             ) as details 
             GROUP BY id_entrada
           ) as totales;
@@ -624,7 +478,7 @@ router.get('/:tipoReporte', async (req, res) => {
       return res.status(400).json({ message: 'Tipo de reporte no válido.' });
   }
 
-
+  // Ejecución estándar para las consultas que se procesan al final del switch (Todo menos gastos-totales)
   try {
     const result = await pool.query(query, params);
     res.json(result.rows);
