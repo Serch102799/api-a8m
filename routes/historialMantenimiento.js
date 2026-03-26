@@ -125,6 +125,24 @@ router.get('/:idAutobus', async (req, res) => {
           LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
           JOIN empleado e ON se.registrado_por_id = e.id_empleado
           WHERE se.id_autobus = $1 AND se.estatus = 'Activo'
+
+          UNION ALL
+
+          -- 4. NUEVO: PIEZAS RECUPERADAS (CASCOS)
+          SELECT
+            pr.fecha_instalacion as fecha,
+            0 as kilometraje, -- Las piezas recuperadas aún no guardan kilometraje en su tabla actual
+            'Pieza Recuperada' as tipo_item,
+            r.nombre,
+            r.marca,
+            1 as cantidad,
+            'Taller Interno' as solicitado_por,
+            COALESCE(pr.costo_reparacion, 0) as costo_unitario,
+            COALESCE(pr.costo_reparacion, 0) as costo_total
+          FROM pieza_recuperada pr
+          JOIN refaccion r ON pr.id_refaccion = r.id_refaccion
+          WHERE pr.id_autobus_destino = $1 AND pr.estado = 'Instalada'
+
        ) as movimientos
        ORDER BY fecha DESC`,
       [idAutobus]
@@ -156,6 +174,15 @@ router.get('/:idAutobus', async (req, res) => {
             SUM(costo_total) as costo_total
           FROM servicio_externo
           WHERE id_autobus = $1 AND estatus = 'Activo'
+
+          UNION ALL
+
+          -- NUEVO: Costos de PIEZAS RECUPERADAS (CASCOS)
+          SELECT 
+            SUM(costo_reparacion) as costo_total
+          FROM pieza_recuperada
+          WHERE id_autobus_destino = $1 AND estado = 'Instalada'
+
       ) as costos`,
       [idAutobus]
     );
