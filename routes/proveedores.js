@@ -44,7 +44,25 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener los proveedores' });
   }
 });
+router.get('/buscar', async (req, res) => {
+  const { term } = req.query;
+  
+  if (!term) return res.json([]);
 
+  try {
+    const result = await pool.query(
+      `SELECT * FROM Proveedor 
+       WHERE LOWER(Nombre_Proveedor) LIKE LOWER($1) 
+       ORDER BY Nombre_Proveedor ASC 
+       LIMIT 20`,
+      [`%${term}%`]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error en buscador de proveedores:', error);
+    res.status(500).json({ message: 'Error al buscar proveedores' });
+  }
+});
 // ==============================
 // GET /api/proveedores/:id
 // ==============================
