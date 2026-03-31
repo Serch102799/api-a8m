@@ -56,46 +56,80 @@ router.post('/', verifyToken, async (req, res) => {
 // =======================================================
 // ACTUALIZAR ESTADO Y DATOS DE LA PIEZA (Mover en el Kanban)
 // =======================================================
-router.put('/:id', verifyToken, async (req, res) => {
-    const { id } = req.params;
-    const { 
-        estado, id_proveedor_reparacion, costo_reparacion, 
-        factura_reparacion, id_autobus_destino, observaciones 
-    } = req.body;
+// ==============================
+// PUT /api/recuperados/:id (Avanzar Estado y Clonar Lotes)
+// ==============================
+router.put('/:id', async (req, res) => {
+  const { id } = req.params;
+  const { estado, id_autobus_destino, factura_reparacion, cantidad, costo_total_factura } = req.body;
 
-    try {
-        // Dependiendo del estado al que pase, actualizamos ciertas fechas automáticamente
-        let query = `
-            UPDATE pieza_recuperada 
-            SET estado = $1, 
-                id_proveedor_reparacion = COALESCE($2, id_proveedor_reparacion),
-                costo_reparacion = COALESCE($3, costo_reparacion),
-                factura_reparacion = COALESCE($4, factura_reparacion),
-                id_autobus_destino = COALESCE($5, id_autobus_destino),
-                observaciones = COALESCE($6, observaciones)
-        `;
-        
-        // Agregar marcas de tiempo según el estado
-        if (estado === 'En Reparación') query += `, fecha_envio = CURRENT_TIMESTAMP`;
-        if (estado === 'Disponible') query += `, fecha_retorno = CURRENT_TIMESTAMP`;
-        if (estado === 'Instalada') query += `, fecha_instalacion = CURRENT_TIMESTAMP`;
+  try {
+    // 1. OBTENER LOS DATOS ORIGINALES DE LA PIEZA
+    const piezaOriginalReq = await pool.query('SELECT * FROM pieza_recuperada WHERE id_pieza_recuperada = $1', [id]);
+    if (piezaOriginalReq.rows.length === 0) return res.status(404).json({ message: 'Pieza no encontrada' });
+    
+    const pieza = piezaOriginalReq.rows[0];
 
-        query += ` WHERE id_pieza_recuperada = $7 RETURNING *;`;
+    // 2. SI ENTRA A STOCK RECUPERADO (Disponible) DESDE EL TALLER
+    if (estado === 'Disponible') {
+      const cant = parseInt(cantidad) || 1;
+      const costoTotal = parseFloat(costo_total_factura) || 0;
+      const costoUnitario = cant > 0 ? (costoTotal / cant) : 0;
 
-        const values = [estado, id_proveedor_reparacion, costo_reparacion, factura_reparacion, id_autobus_destino, observaciones, id];
-        
-        const { rows } = await pool.query(query, values);
-        
-        if (rows.length === 0) {
-            return res.status(404).json({ message: 'Pieza no encontrada.' });
+      // A) Actualizar la pieza actual (la primera del lote)
+      await pool.query(
+        `UPDATE pieza_recuperada 
+         SET estado = $1, factura_reparacion = $2, costo_reparacion = $3, fecha_retorno = CURRENT_DATE 
+         WHERE id_pieza_recuperada = $4`,
+        [estado, factura_reparacion, costoUnitario, id]
+      );
+
+      // B) Si llegaron más de 1, clonar el resto automáticamente
+      if (cant > 1) {
+        for (let i = 1; i < cant; i++) {
+          await pool.query(
+            `INSERT INTO pieza_recuperada 
+             (id_refaccion, estado, id_autobus_origen, id_proveedor_reparacion, costo_reparacion, factura_reparacion, fecha_baja, fecha_envio, fecha_retorno)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)`,
+            [
+              pieza.id_refaccion, 
+              estado, 
+              pieza.id_autobus_origen, 
+              pieza.id_proveedor_reparacion, 
+              costoUnitario, 
+              factura_reparacion, 
+              pieza.fecha_baja, 
+              pieza.fecha_envio
+            ]
+          );
         }
-        res.status(200).json({ message: `Pieza movida a ${estado} correctamente.`, data: rows[0] });
-    } catch (error) {
-        console.error('Error al actualizar pieza:', error);
-        res.status(500).json({ message: 'Error al actualizar la pieza.', error: error.message });
+      }
+      return res.json({ message: `Se registraron ${cant} piezas en Stock Exitosamente.` });
     }
-});
 
+    // 3. SI EL ESTADO ES 'Instalada' (Lo normal)
+    if (estado === 'Instalada') {
+      await pool.query(
+        `UPDATE pieza_recuperada 
+         SET estado = $1, id_autobus_destino = $2, fecha_instalacion = CURRENT_DATE 
+         WHERE id_pieza_recuperada = $3`,
+        [estado, id_autobus_destino, id]
+      );
+      return res.json({ message: 'Pieza instalada correctamente.' });
+    }
+
+    // 4. CUALQUIER OTRO ESTADO (Ej. Pasar de Yonque a Reparación)
+    await pool.query(
+      `UPDATE pieza_recuperada SET estado = $1 WHERE id_pieza_recuperada = $2`,
+      [estado, id]
+    );
+    res.json({ message: 'Estado actualizado' });
+
+  } catch (error) {
+    console.error('Error al actualizar estado:', error);
+    res.status(500).json({ message: 'Error en el servidor al actualizar la pieza' });
+  }
+});
 // =======================================================
 // ELIMINAR PIEZA (Si se registró por error)
 // =======================================================
