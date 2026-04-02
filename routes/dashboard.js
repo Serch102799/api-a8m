@@ -93,6 +93,9 @@ router.get('/stats', verifyToken, async (req, res) => {
     const stockBajoInsumosPromise = pool.query('SELECT COUNT(*) FROM insumo WHERE stock_actual <= stock_minimo AND stock_minimo > 0');
     const valorInventarioRefaccionesPromise = pool.query('SELECT SUM(cantidad_disponible * costo_unitario_final) AS valor_total FROM lote_refaccion');
     const valorInventarioInsumosPromise = pool.query('SELECT SUM(stock_actual * costo_unitario_promedio) AS valor_total FROM insumo');
+    
+    // 🚀 NUEVO: Consultamos el valor de las piezas recuperadas disponibles
+    const valorInventarioRecuperadosPromise = pool.query("SELECT COALESCE(SUM(costo_reparacion), 0) AS valor_total FROM pieza_recuperada WHERE estado = 'Disponible'");
 
     // --- Promesas para Gráficas y Listas ---
     const topStockRefaccionesPromise = pool.query(`
@@ -146,43 +149,25 @@ router.get('/stats', verifyToken, async (req, res) => {
       ORDER BY fecha_operacion DESC
       LIMIT 5
     `);
-    const topCostoAutobusesPromise = pool.query(`
-      SELECT a.economico, COALESCE(SUM(costos.costo_total), 0) as costo_total
-      FROM autobus a
-      LEFT JOIN (
-          SELECT sa.id_autobus, SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
-          FROM detalle_salida ds
-          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-          GROUP BY sa.id_autobus
-          UNION ALL
-          SELECT sa.id_autobus, SUM(dsi.cantidad_usada * i.costo_unitario_promedio) as costo_total
-          FROM detalle_salida_insumo dsi
-          JOIN insumo i ON dsi.id_insumo = i.id_insumo
-          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
-          GROUP BY sa.id_autobus
-      ) as costos ON a.id_autobus = costos.id_autobus
-      GROUP BY a.id_autobus, a.economico
-      ORDER BY costo_total DESC
-      LIMIT 5
-    `);
-
-    // Ejecutar todas las promesas en paralelo
+    
+    // 🚀 NUEVO: Agregamos valorInventarioRecuperadosPromise al Promise.all
     const [
-      totalRefaccionesRes, totalInsumosRes,totalPiezasRefaccionesRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
-      valorInventarioRefaccionesRes, valorInventarioInsumosRes, topStockRefaccionesRes,
+      totalRefaccionesRes, totalInsumosRes, totalPiezasRefaccionesRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
+      valorInventarioRefaccionesRes, valorInventarioInsumosRes, valorInventarioRecuperadosRes, topStockRefaccionesRes,
       topStockInsumosRes, lowStockRefaccionesRes, lowStockInsumosRes,
-      ultimasEntradasRes, ultimasSalidasRes, topCostoAutobusesRes
+      ultimasEntradasRes, ultimasSalidasRes
     ] = await Promise.all([
-      totalRefaccionesPromise, totalInsumosPromise,totalPiezasRefaccionesPromise, stockBajoRefaccionesPromise, stockBajoInsumosPromise,
-      valorInventarioRefaccionesPromise, valorInventarioInsumosPromise, topStockRefaccionesPromise,
+      totalRefaccionesPromise, totalInsumosPromise, totalPiezasRefaccionesPromise, stockBajoRefaccionesPromise, stockBajoInsumosPromise,
+      valorInventarioRefaccionesPromise, valorInventarioInsumosPromise, valorInventarioRecuperadosPromise, topStockRefaccionesPromise,
       topStockInsumosPromise, lowStockRefaccionesPromise, lowStockInsumosPromise,
-      ultimasEntradasPromise, ultimasSalidasPromise, topCostoAutobusesPromise
+      ultimasEntradasPromise, ultimasSalidasPromise
     ]);
 
-    // Procesar y combinar los resultados
-    const valorTotalInventario = (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) + 
-                                 (parseFloat(valorInventarioInsumosRes.rows[0]?.valor_total) || 0);
+    // 🚀 NUEVO: Sumamos los 3 valores para el Gran Total del Inventario
+    const valorTotalInventario = 
+      (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) + 
+      (parseFloat(valorInventarioInsumosRes.rows[0]?.valor_total) || 0) +
+      (parseFloat(valorInventarioRecuperadosRes.rows[0]?.valor_total) || 0);
 
     const stats = {
       totalRefacciones: parseInt(totalRefaccionesRes.rows[0].count, 10),
@@ -190,14 +175,13 @@ router.get('/stats', verifyToken, async (req, res) => {
       totalPiezasRefacciones: parseInt(totalPiezasRefaccionesRes.rows[0].total_piezas, 10) || 0,
       refaccionesStockBajo: parseInt(stockBajoRefaccionesRes.rows[0].count, 10),
       insumosStockBajo: parseInt(stockBajoInsumosRes.rows[0].count, 10),
-      valorTotalInventario: valorTotalInventario,
+      valorTotalInventario: valorTotalInventario, // Aquí viaja la nueva suma al dashboard
       topStockRefacciones: topStockRefaccionesRes.rows.map(item => ({ nombre: item.nombre, stock_actual: parseFloat(item.total_stock) })),
       topStockInsumos: topStockInsumosRes.rows,
       lowStockRefacciones: lowStockRefaccionesRes.rows,
       lowStockInsumos: lowStockInsumosRes.rows,
       ultimasEntradas: ultimasEntradasRes.rows,
       ultimasSalidas: ultimasSalidasRes.rows,
-      topCostoAutobuses: topCostoAutobusesRes.rows.map(item => ({ ...item, costo_total: parseFloat(item.costo_total) }))
     };
 
     res.json(stats);
@@ -205,6 +189,52 @@ router.get('/stats', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Error al obtener estadísticas del dashboard:', error);
     res.status(500).json({ message: 'Error en el servidor' });
+  }
+});
+router.get('/top-autobuses', async (req, res) => {
+  // Recibimos las fechas que manda el calendario de Angular
+  const { fechaInicio, fechaFin } = req.query;
+
+  try {
+    if (!fechaInicio || !fechaFin) {
+      return res.status(400).json({ message: 'Se requieren las fechas de inicio y fin.' });
+    }
+
+    const query = `
+      SELECT a.economico, COALESCE(SUM(costos.costo_total), 0) as costo_total
+      FROM autobus a
+      JOIN (
+          -- 1. Suma de Gastos en REFACCIONES en el periodo indicado
+          SELECT sa.id_autobus, SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion <= $2
+          GROUP BY sa.id_autobus
+          
+          UNION ALL
+          
+          -- 2. Suma de Gastos en INSUMOS en el periodo indicado
+          SELECT sa.id_autobus, SUM(dsi.cantidad_usada * i.costo_unitario_promedio) as costo_total
+          FROM detalle_salida_insumo dsi
+          JOIN insumo i ON dsi.id_insumo = i.id_insumo
+          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion <= $2
+          GROUP BY sa.id_autobus
+      ) as costos ON a.id_autobus = costos.id_autobus
+      GROUP BY a.id_autobus, a.economico
+      ORDER BY costo_total DESC
+      LIMIT 5
+    `;
+
+    // Pasamos las variables $1 y $2 a la consulta
+    const result = await pool.query(query, [fechaInicio, fechaFin]);
+    
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error('Error al obtener el Top de Autobuses Dinámico:', error);
+    res.status(500).json({ message: 'Error interno al calcular los gastos de autobuses.' });
   }
 });
 module.exports = router;
