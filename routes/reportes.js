@@ -5,7 +5,106 @@ const verifyToken = require('../middleware/verifyToken');
 
 router.use(verifyToken);
 
+// Endpoint para obtener categorías disponibles
+router.get('/categorias-disponibles', verifyToken, async (req, res) => {
+  try {
+    // Busca las categorías de refacciones y las une con los tipo_insumo de insumos
+    const query = `
+      SELECT DISTINCT categoria as nombre_categoria 
+      FROM refaccion 
+      WHERE categoria IS NOT NULL AND categoria != ''
+      
+      UNION
+      
+      SELECT DISTINCT CAST(tipo_insumo AS VARCHAR) as nombre_categoria 
+      FROM insumo 
+      WHERE tipo_insumo IS NOT NULL
+      
+      ORDER BY nombre_categoria ASC
+    `;
+    const result = await pool.query(query);
+    // Mapeamos el resultado para enviarle al Frontend solo un arreglo de strings
+    res.json(result.rows.map(r => r.nombre_categoria));
+  } catch (error) {
+    console.error('Error al obtener categorías:', error);
+    res.status(500).json({ message: 'Error al obtener categorías' });
+  }
+});
 
+// =======================================================
+// 2. REPORTE DE MOVIMIENTOS POR CATEGORÍA
+// =======================================================
+router.get('/movimientos-categoria', verifyToken, async (req, res) => {
+  const { categoria, fechaInicio, fechaFin } = req.query;
+
+  try {
+    if (!categoria || !fechaInicio || !fechaFin) {
+      return res.status(400).json({ message: 'Categoría y fechas son requeridas.' });
+    }
+
+    const query = `
+      -- 1. SALIDAS DE REFACCIONES
+      SELECT sa.fecha_operacion as fecha, 'Salida' as tipo_movimiento, 'Refacción' as tipo_item, 
+             r.nombre as articulo, r.numero_parte, ds.cantidad_despachada as cantidad, 
+             (ds.cantidad_despachada * l.costo_unitario_final) as costo_total, 
+             'Bus ' || a.economico as destino_origen
+      FROM detalle_salida ds
+      JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+      JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+      JOIN refaccion r ON l.id_refaccion = r.id_refaccion
+      LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus
+      WHERE r.categoria = $1 AND sa.fecha_operacion >= $2 AND sa.fecha_operacion <= $3
+
+      UNION ALL
+
+      -- 2. ENTRADAS DE REFACCIONES (Usando de.costo_unitario_entrada)
+      SELECT ea.fecha_operacion as fecha, 'Entrada' as tipo_movimiento, 'Refacción' as tipo_item, 
+             r.nombre as articulo, r.numero_parte, de.cantidad_recibida as cantidad, 
+             (de.cantidad_recibida * de.costo_unitario_entrada) as costo_total, 
+             p.nombre_proveedor as destino_origen
+      FROM detalle_entrada de
+      JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
+      JOIN refaccion r ON de.id_refaccion = r.id_refaccion
+      LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+      WHERE r.categoria = $1 AND ea.fecha_operacion >= $2 AND ea.fecha_operacion <= $3
+
+      UNION ALL
+
+      -- 3. SALIDAS DE INSUMOS
+      SELECT sa.fecha_operacion as fecha, 'Salida' as tipo_movimiento, 'Insumo' as tipo_item, 
+             i.nombre as articulo, 'N/A' as numero_parte, dsi.cantidad_usada as cantidad, 
+             (dsi.cantidad_usada * i.costo_unitario_promedio) as costo_total, 
+             'Bus ' || a.economico as destino_origen
+      FROM detalle_salida_insumo dsi
+      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+      JOIN insumo i ON dsi.id_insumo = i.id_insumo
+      LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus
+      WHERE CAST(i.tipo_insumo AS VARCHAR) = $1 AND sa.fecha_operacion >= $2 AND sa.fecha_operacion <= $3
+
+      UNION ALL
+
+      -- 4. ENTRADAS DE INSUMOS (Usando dei.costo_unitario_final)
+      SELECT ea.fecha_operacion as fecha, 'Entrada' as tipo_movimiento, 'Insumo' as tipo_item, 
+             i.nombre as articulo, 'N/A' as numero_parte, dei.cantidad_recibida as cantidad, 
+             (dei.cantidad_recibida * dei.costo_unitario_final) as costo_total, 
+             p.nombre_proveedor as destino_origen
+      FROM detalle_entrada_insumo dei
+      JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada
+      JOIN insumo i ON dei.id_insumo = i.id_insumo
+      LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+      WHERE CAST(i.tipo_insumo AS VARCHAR) = $1 AND ea.fecha_operacion >= $2 AND ea.fecha_operacion <= $3
+
+      ORDER BY fecha DESC;
+    `;
+
+    const result = await pool.query(query, [categoria, fechaInicio, fechaFin]);
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error('Error al generar reporte por categoría:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
 
 router.get('/:tipoReporte', async (req, res) => {
   const { tipoReporte } = req.params;
@@ -386,5 +485,6 @@ router.get('/:tipoReporte', async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
+
 
 module.exports = router;

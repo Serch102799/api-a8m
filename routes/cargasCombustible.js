@@ -16,19 +16,37 @@ router.get('/', verifyToken, async (req, res) => {
         id_rutas = '',
         fecha_desde = '',
         fecha_hasta = '',
-        tipo_calculo = 'vueltas',
+        // Lo dejamos vacío por defecto para que el Dashboard traiga todo el consumo
+        tipo_calculo = '', 
     } = req.query;
 
     try {
         const params = [];
         let whereClauses = [];
 
-        if (search.trim()) {
+        // 1. FILTRO DE BÚSQUEDA UNIVERSAL (Económico, Operador o RUTA)
+        // ¡Aquí está la magia para que el Dashboard detecte la ruta escrita!
+        if (search && search.trim() !== '') {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(a.economico ILIKE $${params.length} OR o.nombre_completo ILIKE $${params.length})`);
+            whereClauses.push(`(
+                a.economico ILIKE $${params.length} 
+                OR o.nombre_completo ILIKE $${params.length}
+                OR cc.id_carga IN (
+                    SELECT ccr.id_carga 
+                    FROM cargas_combustible_rutas ccr 
+                    JOIN rutas r ON ccr.id_ruta = r.id_ruta 
+                    WHERE r.nombre_ruta ILIKE $${params.length}
+                )
+                OR cc.id_ruta_principal IN (
+                    SELECT r.id_ruta 
+                    FROM rutas r 
+                    WHERE r.nombre_ruta ILIKE $${params.length}
+                )
+            )`);
         }
 
-        if (id_rutas && id_rutas !== '' && tipo_calculo === 'vueltas') {
+        // 2. Filtro de Rutas por Checkbox (Para la tabla de Historial)
+        if (id_rutas && id_rutas !== '') {
             const rutasArray = id_rutas.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
             if (rutasArray.length > 0) {
                 params.push(rutasArray);
@@ -40,9 +58,10 @@ router.get('/', verifyToken, async (req, res) => {
             }
         }
 
+        // 3. Filtros de Fecha
         if (fecha_desde && fecha_desde !== '') {
             params.push(fecha_desde);
-            whereClauses.push(`cc.fecha_operacion >= $${params.length}::timestamp`);
+            whereClauses.push(`cc.fecha_operacion >=$${params.length}::timestamp`);
         }
 
         if (fecha_hasta && fecha_hasta !== '') {
@@ -50,11 +69,15 @@ router.get('/', verifyToken, async (req, res) => {
             whereClauses.push(`cc.fecha_operacion <= $${params.length}::timestamp`);
         }
 
-        params.push(tipo_calculo);
-        whereClauses.push(`cc.tipo_calculo = $${params.length}`);
+        // 4. Filtro por Tipo de Cálculo (Solo se aplica si se envía explícitamente)
+        if (tipo_calculo && tipo_calculo !== '') {
+            params.push(tipo_calculo);
+            whereClauses.push(`cc.tipo_calculo =$${params.length}`);
+        }
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
+        // --- CONSULTA PARA OBTENER EL TOTAL DE REGISTROS (PAGINACIÓN) ---
         const totalQuery = `
             SELECT COUNT(DISTINCT cc.id_carga) as count
             FROM cargas_combustible cc
@@ -67,21 +90,7 @@ router.get('/', verifyToken, async (req, res) => {
 
         const offset = (page - 1) * limit;
         
-        let selectRutas = '';
-        if (tipo_calculo === 'vueltas') {
-            selectRutas = `(
-                SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
-                FROM cargas_combustible_rutas ccr
-                JOIN rutas r ON ccr.id_ruta = r.id_ruta
-                WHERE ccr.id_carga = cc.id_carga
-            ) as rutas_y_vueltas`;
-        } else if (tipo_calculo === 'dias') {
-            selectRutas = `COALESCE(
-                (SELECT r.nombre_ruta FROM rutas r WHERE r.id_ruta = cc.id_ruta_principal),
-                'Sin especificar'
-            ) as rutas_y_vueltas`;
-        }
-
+        // --- CONSULTA PRINCIPAL PARA OBTENER LOS DATOS ---
         const dataQuery = `
             SELECT 
                 cc.*,
@@ -90,7 +99,19 @@ router.get('/', verifyToken, async (req, res) => {
                 a.marca,
                 o.nombre_completo as nombre_operador,
                 d.nombre as nombre_despachador,
-                ${selectRutas},
+                CASE 
+                    WHEN cc.tipo_calculo = 'vueltas' THEN (
+                        SELECT STRING_AGG(r.nombre_ruta || ' (' || ccr.numero_vueltas || ' vueltas)', ', ')
+                        FROM cargas_combustible_rutas ccr
+                        JOIN rutas r ON ccr.id_ruta = r.id_ruta
+                        WHERE ccr.id_carga = cc.id_carga
+                    )
+                    WHEN cc.tipo_calculo = 'dias' THEN COALESCE(
+                        (SELECT r.nombre_ruta FROM rutas r WHERE r.id_ruta = cc.id_ruta_principal),
+                        'Sin especificar'
+                    )
+                    ELSE '-'
+                END as rutas_y_vueltas,
                 rr.rendimiento_excelente,
                 rr.rendimiento_bueno,
                 rr.rendimiento_regular,
@@ -119,13 +140,14 @@ router.get('/', verifyToken, async (req, res) => {
                 )
             ${whereString}
             ORDER BY cc.fecha_operacion DESC 
-            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2} 
         `;
 
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
+        // Agregamos la leyenda " (X días)" a las cargas que son por día
         const dataWithDays = dataResult.rows.map(row => {
-            if (tipo_calculo === 'dias') {
+            if (row.tipo_calculo === 'dias') {
                 return {
                     ...row,
                     rutas_y_vueltas: `${row.rutas_y_vueltas} (${row.dias_laborados} días)`
