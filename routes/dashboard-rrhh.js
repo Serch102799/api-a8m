@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
   try {
     const { fecha_desde, fecha_hasta, id_ruta } = req.query;
 
-    // 1. KPIs de Licencias (Estos se mantienen globales o según necesites)
+    // 1. KPIs de Licencias
     const kpisQuery = `
       SELECT 
         (SELECT COUNT(*) FROM operadores WHERE esta_activo = true) as operadores_activos,
@@ -18,7 +18,29 @@ router.get('/', async (req, res) => {
         (SELECT COUNT(*) FROM operadores WHERE esta_activo = true AND licencia_vencimiento IS NULL) as sin_licencia
     `;
 
-    // 2. Lógica de Filtros para Rendimiento
+    // 2. DETALLES DE LICENCIAS PARA LOS MODALES (¡Esto era lo que faltaba!)
+    const detallesVencidasQuery = `
+      SELECT nombre_completo, licencia_vencimiento as fecha_vencimiento 
+      FROM operadores 
+      WHERE esta_activo = true AND licencia_vencimiento < CURRENT_DATE 
+      ORDER BY licencia_vencimiento ASC
+    `;
+    
+    const detallesPorVencerQuery = `
+      SELECT nombre_completo, licencia_vencimiento as fecha_vencimiento 
+      FROM operadores 
+      WHERE esta_activo = true AND licencia_vencimiento >= CURRENT_DATE AND licencia_vencimiento <= CURRENT_DATE + INTERVAL '30 days' 
+      ORDER BY licencia_vencimiento ASC
+    `;
+    
+    const detallesSinLicenciaQuery = `
+      SELECT nombre_completo 
+      FROM operadores 
+      WHERE esta_activo = true AND licencia_vencimiento IS NULL 
+      ORDER BY nombre_completo ASC
+    `;
+
+    // 3. Lógica de Filtros para Rendimiento (Top 10)
     let params = [];
     let filterConditions = `WHERE o.esta_activo = true`;
 
@@ -30,7 +52,7 @@ router.get('/', async (req, res) => {
         filterConditions += ` AND c.fecha_operacion >= CURRENT_DATE - INTERVAL '7 days'`;
     }
 
-    // Filtro de Ruta - CORREGIDO: Usando el alias 'c' correctamente
+    // Filtro de Ruta
     if (id_ruta) {
         const rutaParamIndex = params.length + 1;
         params.push(id_ruta);
@@ -67,8 +89,12 @@ router.get('/', async (req, res) => {
       WHERE total_litros > 0
     `;
 
-    const [kpis, rendimiento] = await Promise.all([
+    // 4. EJECUTAMOS TODAS LAS CONSULTAS (Las 5 al mismo tiempo para que sea rápido)
+    const [kpis, vencidas, porVencer, sinLicencia, rendimiento] = await Promise.all([
       pool.query(kpisQuery),
+      pool.query(detallesVencidasQuery),
+      pool.query(detallesPorVencerQuery),
+      pool.query(detallesSinLicenciaQuery),
       pool.query(rendimientoQuery, params)
     ]);
 
@@ -80,8 +106,14 @@ router.get('/', async (req, res) => {
     const topMejores = [...rendimientos].sort((a, b) => b.rendimiento_promedio - a.rendimiento_promedio).slice(0, 10);
     const topPeores = [...rendimientos].sort((a, b) => a.rendimiento_promedio - b.rendimiento_promedio).slice(0, 10);
 
+    // 5. ENVIAMOS LA RESPUESTA ARMADA CORRECTAMENTE
     res.json({
       kpis: kpis.rows[0],
+      detalles: {
+        vencidas: vencidas.rows,
+        por_vencer: porVencer.rows,
+        sin_licencia: sinLicencia.rows
+      },
       topMejores,
       topPeores
     });
