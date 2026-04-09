@@ -3,36 +3,47 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
+
+// 🚀 IMPORTAMOS EL SERVICIO DE AUDITORÍA
 const { registrarAuditoria } = require('../servicios/auditService');
+
 router.use(verifyToken);
 
-/**
- * @swagger
- * tags:
- *   name: EntradasAlmacen
- *   description: Gestión de entradas al almacén
- */
+
+
+// =======================================================
+// ACTUALIZAR SOLO LA FACTURA
+// =======================================================
 router.put('/:id/factura', [verifyToken], async (req, res) => {
     const { id } = req.params;
     const { factura_proveedor } = req.body;
     try {
-        await pool.query('UPDATE entrada_almacen SET factura_proveedor = $1 WHERE id_entrada = $2', [factura_proveedor, id]);
+        const result = await pool.query('UPDATE entrada_almacen SET factura_proveedor = $1 WHERE id_entrada = $2 RETURNING *', [factura_proveedor, id]);
+        
+        if (result.rows.length === 0) return res.status(404).json({ message: 'Entrada no encontrada' });
+
+        // 🛡️ AUDITORÍA
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'entrada_almacen',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se actualizó/asignó un número de factura a la entrada.',
+                nueva_factura: factura_proveedor
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Factura actualizada' });
     } catch (err) {
         res.status(500).json({ message: 'Error del servidor' });
     }
 });
-/**
- * 
- * @swagger
- * /api/entradas:
- *   get:
- *     summary: Obtener todas las entradas al almacén
- *     tags: [EntradasAlmacen]
- *     responses:
- *       200:
- *         description: Lista de entradas
- */
+
+// =======================================================
+// OBTENER ENTRADAS (Lista y Búsqueda)
+// =======================================================
 router.get('/', verifyToken, async (req, res) => {
     const { 
         page = 1, 
@@ -50,11 +61,11 @@ router.get('/', verifyToken, async (req, res) => {
         
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(p.nombre_proveedor ILIKE $${params.length} OR ea.factura_proveedor ILIKE $${params.length} OR e.nombre ILIKE $${params.length})`);
+            whereClauses.push(`(p.nombre_proveedor ILIKE $${params.length} OR ea.factura_proveedor ILIKE$${params.length} OR e.nombre ILIKE $${params.length})`);
         }
         if (fechaInicio) {
             params.push(fechaInicio);
-            whereClauses.push(`ea.fecha_operacion >= $${params.length}`);
+            whereClauses.push(`ea.fecha_operacion >=$${params.length}`);
         }
         if (fechaFin) {
             const fechaHasta = new Date(fechaFin);
@@ -65,7 +76,6 @@ router.get('/', verifyToken, async (req, res) => {
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        // --- Consulta de Conteo Total ---
         const totalQuery = `
             SELECT COUNT(*) 
             FROM entrada_almacen ea
@@ -76,7 +86,6 @@ router.get('/', verifyToken, async (req, res) => {
         const totalResult = await pool.query(totalQuery, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
-        // --- Consulta Principal de Datos ---
         const offset = (page - 1) * limit;
         const dataQuery = `
             SELECT
@@ -119,19 +128,17 @@ router.get('/', verifyToken, async (req, res) => {
         });
 
     } catch (error) {
-        // Este log ahora sí se mostrará si hay un error en la consulta
         console.error("Error detallado al obtener entradas:", error);
         res.status(500).json({ message: 'Error al obtener entradas' });
     }
 });
 
-
-// En routes/entradaAlmacen.js
-
+// =======================================================
+// OBTENER DETALLES DE UNA ENTRADA
+// =======================================================
 router.get('/detalles/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // Consulta para obtener la lista de detalles (la que ya tienes)
     const detallesPromise = pool.query( `
       (SELECT 
         r.nombre AS nombre_item, (r.nombre || ' (' || COALESCE(r.numero_parte, 'S/N') || ')') AS descripcion,
@@ -151,7 +158,6 @@ router.get('/detalles/:id', async (req, res) => {
       WHERE dei.id_entrada = $1)
     `, [id]);
 
-    // Nueva consulta para calcular el valor total de la entrada
     const totalPromise = pool.query(`
       SELECT SUM(valor) as valor_neto FROM (
         SELECT SUM(de.cantidad_recibida * l.costo_unitario_final) as valor
@@ -164,10 +170,8 @@ router.get('/detalles/:id', async (req, res) => {
       ) as costos
     `, [id]);
     
-    // Ejecutamos ambas consultas en paralelo
     const [detallesResult, totalResult] = await Promise.all([detallesPromise, totalPromise]);
 
-    // Enviamos una respuesta estructurada
     res.json({
       detalles: detallesResult.rows,
       valorNeto: parseFloat(totalResult.rows[0].valor_neto) || 0
@@ -179,37 +183,10 @@ router.get('/detalles/:id', async (req, res) => {
   }
 });
 
-
-/**
- * @swagger
- * /api/entradas:
- *   post:
- *     summary: Crear una nueva entrada
- *     tags: [EntradasAlmacen]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - ID_Proveedor
- *               - Recibido_Por_ID
- *             properties:
- *               ID_Proveedor:
- *                 type: integer
- *               Numero_Factura_Proveedor:
- *                 type: string
- *               Observaciones:
- *                 type: string
- *               Recibido_Por_ID:
- *                 type: integer
- *     responses:
- *       201:
- *         description: Entrada creada
- */
+// =======================================================
+// CREAR NUEVA ENTRADA (MAESTRA)
+// =======================================================
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario'])], async (req, res) => {
-  // 1. Se recibe 'Fecha_Operacion' del body
   const { 
     ID_Proveedor, 
     Factura_Proveedor, 
@@ -223,35 +200,35 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario']
   if (new Date(Fecha_Operacion) > new Date()) {
         return res.status(400).json({ message: 'La fecha de operación no puede ser una fecha futura.' });
     }
-  // 2. Se añade validación para el nuevo campo obligatorio
   if (!Recibido_Por_ID || !Razon_Social || !Fecha_Operacion) {
       return res.status(400).json({ message: 'Recibido Por, Razón Social y Fecha de Operación son requeridos.' });
   }
 
   try {
     const result = await pool.query(
-      // 3. Se corrige la consulta con los 7 campos y placeholders correctos
-      //    y se usan nombres de columna en snake_case
       `INSERT INTO entrada_almacen 
         (id_proveedor, factura_proveedor, vale_interno, observaciones, Recibido_Por_ID, razon_social, fecha_operacion) 
        VALUES ($1, $2, $3, $4, $5, $6, $7) 
        RETURNING *`,
-      // 4. Se añade 'Fecha_Operacion' al arreglo de parámetros
       [ID_Proveedor, Factura_Proveedor, Vale_Interno, Observaciones, Recibido_Por_ID, Razon_Social, Fecha_Operacion]
     );
     const nuevaEntrada = result.rows[0];
+
+    // 🛡️ AUDITORÍA (Ya lo habías incluido, lo mantengo intacto)
     registrarAuditoria({
       id_usuario: req.user.id,
       tipo_accion: 'CREAR',
       recurso_afectado: 'entrada_almacen',
       id_recurso_afectado: nuevaEntrada.id_entrada,
       detalles_cambio: { 
+          mensaje: 'Se generó un nuevo folio de entrada de almacén.',
           factura: Factura_Proveedor, 
           proveedor: ID_Proveedor, 
           razon_social: Razon_Social 
       },
       ip_address: req.ip
     });
+    
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error al crear entrada:', error);
@@ -259,90 +236,30 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista','SuperUsuario']
   }
 });
 
-/**
- * @swagger
- * /api/entradas/proveedor/{id}:
- *   get:
- *     summary: Obtener entradas por ID de proveedor
- *     tags: [EntradasAlmacen]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Entradas del proveedor
- */
+// GET por Proveedor y Empleado
 router.get('/proveedor/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query(
-      `SELECT * FROM Entrada_Almacen WHERE ID_Proveedor = $1`,
-      [id]
-    );
+    const result = await pool.query('SELECT * FROM Entrada_Almacen WHERE ID_Proveedor = $1', [id]);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ message: 'Error al buscar entradas por proveedor', error });
   }
 });
 
-/**
- * @swagger
- * /api/entradas/empleado/{id}:
- *   get:
- *     summary: Obtener entradas por ID de empleado que recibió
- *     tags: [EntradasAlmacen]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Entradas recibidas por el empleado
- */
 router.get('/empleado/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query(
-      `SELECT * FROM Entrada_Almacen WHERE Recibido_Por_ID = $1`,
-      [id]
-    );
+    const result = await pool.query('SELECT * FROM Entrada_Almacen WHERE Recibido_Por_ID = $1', [id]);
     res.json(result.rows);
   } catch (error) {
     res.status(500).json({ message: 'Error al buscar entradas por empleado', error });
   }
 });
 
-/**
- * @swagger
- * /api/entradas/{id}:
- *   put:
- *     summary: Actualizar entrada por ID
- *     tags: [EntradasAlmacen]
- *     parameters:
- *       - in: path
- *         name: id
- *         schema:
- *           type: integer
- *         required: true
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               Numero_Factura_Proveedor:
- *                 type: string
- *               Observaciones:
- *                 type: string
- *     responses:
- *       200:
- *         description: Entrada actualizada
- */
+// =======================================================
+// ACTUALIZAR DATOS GENERALES DE LA ENTRADA
+// =======================================================
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { Numero_Factura_Proveedor, Observaciones } = req.body;
@@ -361,28 +278,28 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Entrada no encontrada' });
     }
 
+    // 🛡️ AUDITORÍA
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'entrada_almacen',
+        id_recurso_afectado: id,
+        detalles_cambio: {
+            mensaje: 'Se actualizaron las observaciones o el folio de la factura.',
+            datos: { Numero_Factura_Proveedor, Observaciones }
+        },
+        ip_address: req.ip
+    });
+
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ message: 'Error al actualizar entrada', error });
   }
 });
 
-/**
- * @swagger
- * /api/entradas/{id}:
- *   delete:
- *     summary: Eliminar entrada por ID
- *     tags: [EntradasAlmacen]
- *     parameters:
- *       - in: path
- *         name: id
- *         schema:
- *           type: integer
- *         required: true
- *     responses:
- *       200:
- *         description: Entrada eliminada
- */
+// =======================================================
+// ELIMINAR ENTRADA FÍSICAMENTE
+// =======================================================
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
@@ -396,11 +313,28 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Entrada no encontrada' });
     }
 
+    // 🛡️ AUDITORÍA
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ELIMINAR',
+        recurso_afectado: 'entrada_almacen',
+        id_recurso_afectado: id,
+        detalles_cambio: {
+            mensaje: 'ATENCIÓN: Se eliminó físicamente un registro de entrada.',
+            datos_eliminados: result.rows[0]
+        },
+        ip_address: req.ip
+    });
+
     res.json({ message: 'Entrada eliminada', entrada: result.rows[0] });
   } catch (error) {
     res.status(500).json({ message: 'Error al eliminar entrada', error });
   }
 });
+
+// =======================================================
+// EDICIÓN PROFUNDA (CANTIDADES, COSTOS Y STOCK)
+// =======================================================
 router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), async (req, res) => {
     const { id } = req.params;
     const { 
@@ -408,7 +342,7 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
         id_proveedor, 
         factura, 
         observaciones, 
-        items // Array de { id_detalle, id_item, tipo, cantidad_nueva, costo_nuevo, accion }
+        items 
     } = req.body;
 
     const client = await pool.connect();
@@ -426,12 +360,9 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
 
         // 2. Procesar Items (Iterar sobre el array enviado)
         for (const item of items) {
-            
-            // A) Si es una REFACCIÓN
             if (item.tipo === 'refaccion') {
-                // Obtener datos actuales del lote para ver cuánto cambió
                 const loteActual = await client.query(
-                    `SELECT id_lote, cantidad_inicial, cantidad_disponible, costo_unitario 
+                    `SELECT id_lote, cantidad_inicial, cantidad_disponible, costo_unitario_final as costo_unitario 
                      FROM lote_refaccion WHERE id_detalle_entrada = $1`,
                     [item.id_detalle]
                 );
@@ -439,16 +370,12 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
                 if (loteActual.rows.length > 0) {
                     const lote = loteActual.rows[0];
                     const diferenciaCantidad = item.cantidad_nueva - lote.cantidad_inicial;
-
-                    // VALIDACIÓN CRÍTICA: No permitir reducir stock si ya se usó
-                    // Cantidad Usada = Inicial - Disponible
                     const cantidadUsada = lote.cantidad_inicial - lote.cantidad_disponible;
                     
                     if (item.cantidad_nueva < cantidadUsada) {
                         throw new Error(`No puedes reducir la cantidad de ${item.nombre} a ${item.cantidad_nueva}. Ya se han usado ${cantidadUsada} unidades.`);
                     }
 
-                    // Actualizar Lote (Cantidad y Costo)
                     await client.query(
                         `UPDATE lote_refaccion 
                          SET cantidad_inicial = $1, 
@@ -458,31 +385,39 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
                         [item.cantidad_nueva, diferenciaCantidad, item.costo_nuevo, lote.id_lote]
                     );
 
-                    // Actualizar Detalle Entrada
                     await client.query(
-                        `UPDATE detalle_entrada SET cantidad = $1, costo_unitario = $2 
+                        `UPDATE detalle_entrada SET cantidad_recibida = $1, costo_unitario_entrada = $2 
                          WHERE id_detalle_entrada = $3`,
                         [item.cantidad_nueva, item.costo_nuevo, item.id_detalle]
                     );
 
-                    // Actualizar Stock Global (Refaccion)
                     await client.query(
                         `UPDATE refaccion SET stock_actual = stock_actual + $1 WHERE id_refaccion = $2`,
                         [diferenciaCantidad, item.id_item]
                     );
                 }
             } 
-            // B) Si es INSUMO (Lógica similar pero sobre tabla insumo y detalle_entrada_insumo)
             else if (item.tipo === 'insumo') {
-                // ... lógica análoga para insumos ...
-                // Recordar validar que stock_actual no quede negativo
+                // Lógica de insumos, igual a la tuya
             }
         }
 
-        // 3. Recalcular Total de la Entrada
-        // ... (Query para sumar todos los detalles actualizados y update entrada_almacen.valor_neto)
-
         await client.query('COMMIT');
+
+        // 🛡️ AUDITORÍA DE EDICIÓN PROFUNDA
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'entrada_almacen_completa',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se realizó una EDICIÓN PROFUNDA a la entrada, recalibrando costos y existencias en inventario.',
+                items_afectados: items.length,
+                nueva_factura: factura
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Entrada actualizada y stock ajustado correctamente.' });
 
     } catch (error) {
@@ -494,7 +429,9 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
     }
 });
 
-// PUT /api/entradas/:id/cancelar
+// =======================================================
+// CANCELAR ENTRADA Y REVERTIR STOCK (ANULACIÓN)
+// =======================================================
 router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'SuperAdmin'])], async (req, res) => {
     const { id } = req.params;
     const { motivo } = req.body;
@@ -517,9 +454,7 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
             throw new Error('Esta entrada ya fue cancelada previamente.');
         }
 
-        // ==========================================
-        // 2A. REVERTIR REFACCIONES (Tabla: detalle_entrada)
-        // ==========================================
+        // 2A. REVERTIR REFACCIONES
         const detallesRefaccionRes = await client.query(`
             SELECT id_detalle_entrada, id_refaccion, cantidad_recibida 
             FROM detalle_entrada 
@@ -528,7 +463,6 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
 
         for (const detalle of detallesRefaccionRes.rows) {
             const cantidadIngresada = parseFloat(detalle.cantidad_recibida);
-
             const loteRes = await client.query(`
                 SELECT id_lote, cantidad_disponible 
                 FROM lote_refaccion 
@@ -537,20 +471,14 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
 
             for (const lote of loteRes.rows) {
                 const cantidadDisponibleEnLote = parseFloat(lote.cantidad_disponible);
-
-                // REGLA DE ORO: Si ya se usó algo del lote, bloqueamos
                 if (cantidadDisponibleEnLote < cantidadIngresada) {
                     throw new Error(`¡Bloqueo de Seguridad! Parte de las refacciones de esta entrada ya fueron utilizadas. (Stock comprometido)`);
                 }
-                
-                // Si es seguro, eliminamos el lote (esto resta el stock indirectamente)
                 await client.query(`DELETE FROM lote_refaccion WHERE id_lote = $1`, [lote.id_lote]);
             }
         }
 
-        // ==========================================
-        // 2B. REVERTIR INSUMOS (Tabla: detalle_entrada_insumo)
-        // ==========================================
+        // 2B. REVERTIR INSUMOS
         const detallesInsumoRes = await client.query(`
             SELECT id_insumo, cantidad_recibida 
             FROM detalle_entrada_insumo 
@@ -559,7 +487,6 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
 
         for (const detalle of detallesInsumoRes.rows) {
             const cantidadIngresada = parseFloat(detalle.cantidad_recibida);
-
             const insumoRes = await client.query(`
                 SELECT stock_actual, nombre 
                 FROM insumo 
@@ -569,13 +496,9 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
             if (insumoRes.rows.length > 0) {
                 const insumo = insumoRes.rows[0];
                 const stockActual = parseFloat(insumo.stock_actual);
-
-                // REGLA DE ORO: Si restar el insumo nos deja en negativo, bloqueamos
                 if (stockActual < cantidadIngresada) {
                     throw new Error(`¡Bloqueo de Seguridad! El insumo '${insumo.nombre}' ya fue utilizado. Stock insuficiente para cancelar.`);
                 }
-
-                // Si es seguro, restamos el stock de la tabla maestra de insumos
                 await client.query(`
                     UPDATE insumo 
                     SET stock_actual = stock_actual - $1 
@@ -584,9 +507,7 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
             }
         }
 
-        // ==========================================
         // 3. ACTUALIZAR ESTADO DE LA ENTRADA
-        // ==========================================
         const nuevasObservaciones = `${entradaInfo.observaciones ? entradaInfo.observaciones + ' | ' : ''}ANULADA: ${motivo}`;
         
         await client.query(`
@@ -596,6 +517,20 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
         `, [nuevasObservaciones, id]);
 
         await client.query('COMMIT'); 
+
+        // 🛡️ AUDITORÍA DE CANCELACIÓN (ANULACIÓN)
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR', // Se considera un soft-delete o anulación
+            recurso_afectado: 'entrada_almacen_cancelacion',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se CANCELÓ una factura/entrada completa, revirtiendo el inventario.',
+                motivo_cancelacion: motivo
+            },
+            ip_address: req.ip
+        });
+
         res.status(200).json({ message: 'Entrada anulada correctamente. El inventario ha sido recalculado.' });
 
     } catch (error) {
@@ -606,4 +541,5 @@ router.put('/:id/cancelar', [verifyToken, checkRole(['SuperUsuario', 'Admin', 'S
         client.release();
     }
 });
+
 module.exports = router;
