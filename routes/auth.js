@@ -99,7 +99,7 @@ router.post(
 
       // --- ¡NUEVO PASO! ---
       // 5. REGISTRAR LA SESIÓN EN LA BASE DE DATOS
-      const ip = req.ip;
+      const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
       const userAgent = req.headers['user-agent'];
 
       const querySesion = `

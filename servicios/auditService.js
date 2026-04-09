@@ -29,9 +29,6 @@ const registrarAuditoria = (datosAccion) => {
       ($1, $2, $3, $4, $5, $6)
   `;
   
-  // Ejecutamos la consulta pero no usamos 'await'
-  // Esto es "fire and forget". No queremos que el usuario
-  // espere a que el log de auditoría se escriba.
   pool.query(query, [
     id_usuario,
     tipo_accion,
@@ -40,8 +37,6 @@ const registrarAuditoria = (datosAccion) => {
     detalles_cambio ? JSON.stringify(detalles_cambio) : null,
     ip_address
   ]).catch(err => {
-    // Si falla el log de auditoría, no detenemos la app,
-    // solo lo registramos en la consola del servidor.
     console.error('Error al registrar auditoría:', err.message);
   });
 };

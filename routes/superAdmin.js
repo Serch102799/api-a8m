@@ -220,7 +220,7 @@ router.post('/registrar-evento', verifyToken, async (req, res) => {
             recurso_afectado: modulo, 
             id_recurso_afectado: null, 
             detalles_cambio: detalles, 
-            ip_address: req.ip
+            ip_address: ip
         });
 
         res.status(200).json({ message: 'Evento registrado' });

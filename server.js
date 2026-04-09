@@ -43,6 +43,7 @@ const serviciosRouter = require('./routes/servicios');
 const vehiculosParticularesRoutes = require('./routes/vehiculosParticulares');
 
 const app = express();
+app.set('trust proxy', true);
 
 const whiteList = [
     'http://localhost:4200',        
