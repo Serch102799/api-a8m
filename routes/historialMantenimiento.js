@@ -192,7 +192,6 @@ router.get('/:idAutobus', async (req, res) => {
       costoTotalPromise,
     ]);
     
-    // Aproveché para sanear bien el formateo de los floats
     const historialFormateado = historialResult.rows.map(item => ({
         ...item,
         costo_unitario: parseFloat(item.costo_unitario || 0),

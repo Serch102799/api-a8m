@@ -3,6 +3,8 @@ const pool = require('../db'); // Ajusta la ruta a tu conexión de BD
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 
+const { registrarAuditoria } = require('../servicios/auditService');
+
 // Protegemos la ruta
 router.use(verifyToken);
 
@@ -40,7 +42,25 @@ router.post('/', async (req, res) => {
     const values = [propietario, puesto, marca, modelo, anio, color, placas, kilometraje_actual || 0];
     
     const result = await pool.query(query, values);
-    res.status(201).json({ message: 'Vehículo registrado exitosamente.', vehiculo: result.rows[0] });
+    const nuevoVehiculo = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'vehiculos_particulares',
+        id_recurso_afectado: nuevoVehiculo.id_vehiculo,
+        detalles_cambio: {
+            mensaje: 'Se registró un nuevo vehículo en la flota administrativa.',
+            propietario: nuevoVehiculo.propietario,
+            marca: nuevoVehiculo.marca,
+            modelo: nuevoVehiculo.modelo,
+            placas: nuevoVehiculo.placas
+        },
+        ip_address: req.ip
+    });
+
+    res.status(201).json({ message: 'Vehículo registrado exitosamente.', vehiculo: nuevoVehiculo });
   } catch (error) {
     console.error('Error al registrar vehículo particular:', error);
     res.status(500).json({ message: 'Error al registrar el vehículo en el sistema.' });
@@ -68,7 +88,22 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Vehículo no encontrado o inactivo.' });
     }
 
-    res.json({ message: 'Vehículo actualizado exitosamente.', vehiculo: result.rows[0] });
+    const vehiculoActualizado = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: ACTUALIZACIÓN
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'vehiculos_particulares',
+        id_recurso_afectado: id,
+        detalles_cambio: {
+            mensaje: 'Se actualizaron los datos de un vehículo particular.',
+            nuevos_datos: req.body // Guardamos el payload completo
+        },
+        ip_address: req.ip
+    });
+
+    res.json({ message: 'Vehículo actualizado exitosamente.', vehiculo: vehiculoActualizado });
   } catch (error) {
     console.error('Error al actualizar vehículo:', error);
     res.status(500).json({ message: 'Error al actualizar los datos del vehículo.' });
@@ -91,6 +126,22 @@ router.delete('/:id', async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ message: 'Vehículo no encontrado.' });
     }
+
+    const vehiculoEliminado = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: ELIMINACIÓN LÓGICA
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ELIMINAR',
+        recurso_afectado: 'vehiculos_particulares',
+        id_recurso_afectado: id,
+        detalles_cambio: {
+            mensaje: 'Se dio de baja (desactivó) un vehículo particular del catálogo.',
+            propietario: vehiculoEliminado.propietario,
+            placas: vehiculoEliminado.placas
+        },
+        ip_address: req.ip
+    });
 
     res.json({ message: 'Vehículo eliminado (dado de baja) del catálogo.' });
   } catch (error) {

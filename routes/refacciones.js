@@ -4,24 +4,9 @@ const pool = require('../db');
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 const router = express.Router();
+const { registrarAuditoria } = require('../servicios/auditService');
 
-/**
- * @swagger
- * tags:
- *   name: Refacciones
- *   description: Gestión de refacciones
- */
 
-/**
- * @swagger
- * /api/refacciones:
- *   get:
- *     summary: Obtener todas las refacciones
- *     tags: [Refacciones]
- *     responses:
- *       200:
- *         description: Lista de refacciones
- */
 router.get('/', verifyToken, async (req, res) => {
     const { 
         page = 1, 
@@ -39,7 +24,7 @@ router.get('/', verifyToken, async (req, res) => {
         
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(r.nombre ILIKE $${params.length} OR r.numero_parte ILIKE $${params.length})`);
+            whereClauses.push(`(r.nombre ILIKE $${params.length} OR r.numero_parte ILIKE$${params.length})`);
         }
         if (filtroCategoria) {
             params.push(filtroCategoria);
@@ -47,7 +32,7 @@ router.get('/', verifyToken, async (req, res) => {
         }
         if (filtroMarca) {
             params.push(filtroMarca);
-            whereClauses.push(`r.marca = $${params.length}`);
+            whereClauses.push(`r.marca =$${params.length}`);
         }
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -106,24 +91,6 @@ router.get('/', verifyToken, async (req, res) => {
     }
 });
 
-/**
- * @swagger
- * /api/refacciones/nombre/{nombre}:
- *   get:
- *     summary: Obtener una refacción por nombre
- *     tags: [Refacciones]
- *     parameters:
- *       - in: path
- *         name: nombre
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Refacción encontrada
- *       404:
- *         description: Refacción no encontrada
- */
 router.get('/nombre/:nombre', async (req, res) => {
   try {
     const { nombre } = req.params;
@@ -137,22 +104,6 @@ router.get('/nombre/:nombre', async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/refacciones/categoria/{categoria}:
- *   get:
- *     summary: Obtener refacciones por categoría
- *     tags: [Refacciones]
- *     parameters:
- *       - in: path
- *         name: categoria
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Lista de refacciones por categoría
- */
 router.get('/categoria/:categoria', async (req, res) => {
   try {
     const { categoria } = req.params;
@@ -163,22 +114,6 @@ router.get('/categoria/:categoria', async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/refacciones/marca/{marca}:
- *   get:
- *     summary: Obtener refacciones por marca
- *     tags: [Refacciones]
- *     parameters:
- *       - in: path
- *         name: marca
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Lista de refacciones por marca
- */
 router.get('/marca/:marca', async (req, res) => {
   try {
     const { marca } = req.params;
@@ -189,71 +124,9 @@ router.get('/marca/:marca', async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/refacciones:
- *   post:
- *     summary: Crear una nueva refacción
- *     tags: [Refacciones]
- *     security:
- *       - bearerAuth: []   # Token JWT requerido
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - Nombre
- *               - Unidad_Medida
- *             properties:
- *               Nombre:
- *                 type: string
- *                 example: "Filtro de aceite"
- *               Numero_Parte:
- *                 type: string
- *                 example: "FA-12345"
- *               Categoria:
- *                 type: string
- *                 example: "Motor"
- *               Marca:
- *                 type: string
- *                 example: "Bosch"
- *               Unidad_Medida:
- *                 type: string
- *                 example: "Pieza"
- *               Ubicacion_Almacen:
- *                 type: string
- *                 example: "Pasillo 3 - Estante B"
- *               Stock_Minimo:
- *                 type: integer
- *                 example: 5
- *               Stock_Maximo:
- *                 type: integer
- *                 example: 50
- *               Proveedor_Principal_ID:
- *                 type: integer
- *                 example: 2
- *               Descripcion:
- *                 type: string
- *                 description: Notas sobre el uso o aplicación de la refacción. (Campo opcional)
- *                 example: "Se utiliza en motores diésel serie XZ."
- *     responses:
- *       201:
- *         description: Refacción creada exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Refaccion'
- *       400:
- *         description: Datos inválidos o refacción duplicada
- *       401:
- *         description: Token inválido o no proporcionado
- *       403:
- *         description: No tiene permisos para esta operación
- *       500:
- *         description: Error en el servidor
- */
+// =======================================================
+// FUSIONAR REFACCIONES
+// =======================================================
 router.post('/fusionar', verifyToken, async (req, res) => {
     const { id_principal, id_duplicado } = req.body;
 
@@ -267,15 +140,25 @@ router.post('/fusionar', verifyToken, async (req, res) => {
         await client.query('BEGIN');
 
         await client.query('UPDATE lote_refaccion SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
-        
         await client.query('UPDATE detalle_entrada SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
-        
-        // OJO: Cambia "detalle_salida" por el nombre real de tu tabla de detalles de salida de refacciones.
         await client.query('UPDATE detalle_salida SET id_refaccion = $1 WHERE id_refaccion = $2', [id_principal, id_duplicado]);
-
         await client.query('DELETE FROM refaccion WHERE id_refaccion = $1', [id_duplicado]);
 
         await client.query('COMMIT');
+
+        // 🛡️ REGISTRO DE AUDITORÍA: FUSIÓN DE ARTÍCULOS
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'refaccion',
+            id_recurso_afectado: id_principal,
+            detalles_cambio: {
+                mensaje: 'Se fusionaron dos artículos. Se trasladó el historial y se eliminó el duplicado.',
+                id_duplicado_eliminado: id_duplicado
+            },
+            ip_address: req.ip
+        });
+
         res.status(200).json({ message: 'Fusión completada con éxito. El historial se ha unificado.' });
 
     } catch (error) {
@@ -286,8 +169,11 @@ router.post('/fusionar', verifyToken, async (req, res) => {
         client.release();
     }
 });
+
+// =======================================================
+// CREAR NUEVA REFACCIÓN
+// =======================================================
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
- 
   const {
     Nombre,
     Numero_Parte,
@@ -310,7 +196,24 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
        RETURNING *`,
       [Nombre, Numero_Parte, Categoria, Marca, Unidad_Medida, Ubicacion_Almacen, Stock_Minimo, Descripcion]
     );
-    res.status(201).json(result.rows[0]);
+
+    const nuevaRefaccion = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: CREAR REFACCIÓN
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'refaccion',
+        id_recurso_afectado: nuevaRefaccion.id_refaccion,
+        detalles_cambio: {
+            nombre: nuevaRefaccion.nombre,
+            numero_parte: nuevaRefaccion.numero_parte,
+            marca: nuevaRefaccion.marca
+        },
+        ip_address: req.ip
+    });
+
+    res.status(201).json(nuevaRefaccion);
   } catch (error) {
     if (error.code === '23505') { 
       return res.status(400).json({ message: 'Una refacción con ese nombre o número de parte ya existe.' });
@@ -320,85 +223,11 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
   }
 });
 
-/**
- * @swagger
- * /api/refacciones/{id}:
- *   put:
- *     summary: Editar una refacción existente por su ID
- *     tags: [Refacciones]
- *     security:
- *       - bearerAuth: []   # Token JWT requerido
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         description: ID numérico de la refacción a editar
- *         schema:
- *           type: integer
- *           example: 12
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - Nombre
- *             properties:
- *               Nombre:
- *                 type: string
- *                 example: "Filtro de aceite premium"
- *               Numero_Parte:
- *                 type: string
- *                 example: "FA-12345"
- *               Categoria:
- *                 type: string
- *                 example: "Motor"
- *               Marca:
- *                 type: string
- *                 example: "Bosch"
- *               Descripcion:
- *                 type: string
- *                 example: "Compatible con motores diésel serie XZ"
- *               Unidad_Medida:
- *                 type: string
- *                 example: "Pieza"
- *               Ubicacion_Almacen:
- *                 type: string
- *                 example: "Pasillo 3 - Estante B"
- *               Stock_Minimo:
- *                 type: integer
- *                 example: 5
- *               Stock_Maximo:
- *                 type: integer
- *                 example: 50
- *               Precio_Costo:
- *                 type: number
- *                 format: float
- *                 example: 125.50
- *     responses:
- *       200:
- *         description: Refacción actualizada exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Refaccion'
- *       400:
- *         description: Datos inválidos o faltantes
- *       401:
- *         description: Token inválido o no proporcionado
- *       403:
- *         description: No tiene permisos para esta operación
- *       404:
- *         description: Refacción no encontrada
- *       500:
- *         description: Error en el servidor
- */
-
+// =======================================================
+// ACTUALIZAR REFACCIÓN
+// =======================================================
 router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (req, res) => {
   const { id } = req.params;
-  
-  // 1. Se elimina 'Precio_Costo' de las variables a recibir
   const {
     Nombre,
     Numero_Parte,
@@ -427,10 +256,10 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
          unidad_medida = $6, 
          ubicacion_almacen = $7, 
          stock_minimo = $8, 
-         stock_maximo = $9 -- 2. Se elimina la línea de 'precio_costo'
-       WHERE id_refaccion = $10 -- 3. El placeholder para el ID ahora es $10
+         stock_maximo = $9 
+       WHERE id_refaccion = $10 
        RETURNING *`,
-      [ // 4. Se elimina 'Precio_Costo' del arreglo de parámetros
+      [
         Nombre,
         Numero_Parte,
         Categoria,
@@ -448,35 +277,25 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'Almacenista'])], async (re
       return res.status(404).json({ message: 'Refacción no encontrada.' });
     }
 
-    res.status(200).json(result.rows[0]);
+    const refaccionActualizada = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: ACTUALIZAR REFACCIÓN
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'refaccion',
+        id_recurso_afectado: id,
+        detalles_cambio: req.body, // Se guarda el payload con los nuevos datos
+        ip_address: req.ip
+    });
+
+    res.status(200).json(refaccionActualizada);
   } catch (error) {
     console.error('Error al actualizar la refacción:', error);
     res.status(500).json({ message: 'Error al actualizar la refacción' });
   }
 });
-/**
- * @swagger
- * /api/refacciones/{id}:
- *   delete:
- *     summary: Eliminar una refacción por ID
- *     tags: [Refacciones]
- *     security:
- *       - bearerAuth: []   # Token JWT requerido
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *         description: ID numérico de la refacción a eliminar
- *     responses:
- *       200:
- *         description: Refacción eliminada correctamente
- *       404:
- *         description: Refacción no encontrada
- *       500:
- *         description: Error en el servidor
- */
+
 // =======================================================
 // ELIMINAR REFACCIÓN (CON BORRADO EN CASCADA SEGURO)
 // =======================================================
@@ -508,6 +327,21 @@ router.delete('/:id', verifyToken, async (req, res) => {
         }
 
         await client.query('COMMIT'); // Guardamos los cambios
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ELIMINAR REFACCIÓN Y SU HISTORIAL
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ELIMINAR',
+            recurso_afectado: 'refaccion',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se eliminó la refacción y todo su historial de entradas/salidas en cascada.',
+                nombre_refaccion: result.rows[0].nombre,
+                numero_parte: result.rows[0].numero_parte
+            },
+            ip_address: req.ip
+        });
+
         res.status(200).json({ message: 'Refacción y todo su historial eliminados correctamente.' });
 
     } catch (error) {
@@ -518,70 +352,6 @@ router.delete('/:id', verifyToken, async (req, res) => {
         client.release();
     }
 });
-/**
- * @swagger
- * /api/refacciones/buscar:
- *   get:
- *     summary: Buscar refacciones para un autocomplete
- *     description: Permite buscar refacciones por nombre, marca o número de parte. Se requiere al menos 2 caracteres.
- *     tags: [Refacciones]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: term
- *         required: true
- *         schema:
- *           type: string
- *         description: Término de búsqueda para nombre, marca o número de parte.
- *     responses:
- *       200:
- *         description: Lista de refacciones que coinciden
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   id_refaccion:
- *                     type: integer
- *                     description: ID único de la refacción
- *                     example: 12
- *                   nombre:
- *                     type: string
- *                     description: Nombre de la refacción
- *                     example: "Filtro de aceite"
- *                   marca:
- *                     type: string
- *                     description: Marca de la refacción
- *                     example: "Bosch"
- *                   numero_parte:
- *                     type: string
- *                     description: Número de parte de la refacción
- *                     example: "BOS-12345"
- *                   stock_actual:
- *                     type: integer
- *                     description: Cantidad disponible en inventario
- *                     example: 25
- *       400:
- *         description: Parámetro de búsqueda inválido (menos de 2 caracteres)
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               example: []
- *       500:
- *         description: Error al buscar refacciones
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Error al buscar refacciones
- */
 
 router.get('/buscar', verifyToken, async (req, res) => {
   const { term } = req.query;
@@ -593,18 +363,15 @@ router.get('/buscar', verifyToken, async (req, res) => {
   try {
     const searchTerm = `%${term}%`;
     
-    // CAMBIO: Se reescribe la consulta para ser mucho más eficiente
     const result = await pool.query(
       `
       WITH found_refacciones AS (
-        -- Paso 1: Encontrar las 10 refacciones que coinciden (esto es muy rápido con los índices)
         SELECT id_refaccion, nombre, marca, numero_parte
         FROM refaccion
         WHERE nombre ILIKE $1 OR marca ILIKE $1 OR numero_parte ILIKE $1
         ORDER BY nombre ASC
         LIMIT 10
       )
-      -- Paso 2: Ahora, solo para esas 10 refacciones, calcula su stock
       SELECT 
         fr.id_refaccion,
         (fr.nombre || ' (' || COALESCE(fr.numero_parte, 'S/N') || ')') AS nombre,
@@ -629,6 +396,5 @@ router.get('/buscar', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al buscar refacciones' });
   }
 });
-
 
 module.exports = router;

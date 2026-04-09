@@ -4,6 +4,8 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+const { registrarAuditoria } = require('../servicios/auditService');
+
 // --- GET / (Obtener todos los tanques y totales por ubicación) ---
 router.get('/', verifyToken, async (req, res) => {
     try {
@@ -69,7 +71,24 @@ router.post('/', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiesel'
             'INSERT INTO tanques_combustible (nombre_tanque, capacidad_litros, nivel_actual_litros, id_ubicacion) VALUES ($1, $2, $3, $4) RETURNING *',
             [nombre_tanque, capacidad_litros || 0, nivel_actual_litros || 0, id_ubicacion]
         );
-        res.status(201).json(result.rows[0]);
+        const nuevoTanque = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE TANQUE
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'CREAR',
+            recurso_afectado: 'tanques_combustible',
+            id_recurso_afectado: nuevoTanque.id_tanque,
+            detalles_cambio: {
+                mensaje: 'Se dio de alta un nuevo tanque de combustible en el sistema.',
+                nombre_tanque: nuevoTanque.nombre_tanque,
+                capacidad: nuevoTanque.capacidad_litros,
+                nivel_inicial: nuevoTanque.nivel_actual_litros
+            },
+            ip_address: req.ip
+        });
+
+        res.status(201).json(nuevoTanque);
     } catch (error) {
         console.error('Error al crear el tanque:', error);
         res.status(500).json({ message: 'Error al crear el tanque' });
@@ -93,6 +112,20 @@ router.put('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDiese
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Tanque no encontrado.' });
         }
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ACTUALIZACIÓN MANUAL DE TANQUE
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'tanques_combustible',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se actualizaron manualmente los parámetros del tanque (posible ajuste de nivel).',
+                nuevos_datos: req.body
+            },
+            ip_address: req.ip
+        });
+
         res.json(result.rows[0]);
     } catch (error) {
         console.error('Error al actualizar el tanque:', error);
@@ -108,10 +141,26 @@ router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', 'AdminDi
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Tanque no encontrado.' });
         }
+
+        const tanqueEliminado = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ELIMINACIÓN
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ELIMINAR',
+            recurso_afectado: 'tanques_combustible',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se eliminó un tanque de combustible del catálogo.',
+                nombre_tanque_eliminado: tanqueEliminado.nombre_tanque
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Tanque eliminado exitosamente.' });
     } catch (error) {
         console.error('Error al eliminar el tanque:', error);
-        res.status(500).json({ message: 'Error al eliminar el tanque' });
+        res.status(500).json({ message: 'Error al eliminar el tanque. Posiblemente tenga historial asociado.' });
     }
 });
 
@@ -155,6 +204,23 @@ router.post('/recargar/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario', '
         );
 
         await client.query('COMMIT');
+
+        // 🛡️ REGISTRO DE AUDITORÍA: RECARGA DE TANQUE (PIPA)
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'tanques_combustible',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se ingresaron litros al tanque (Recarga por Pipa/Proveedor).',
+                litros_cargados: litros_a_cargar,
+                fecha_operacion: fecha_operacion,
+                observaciones: observaciones,
+                nuevo_nivel_tanque: updateResult.rows[0].nivel_actual_litros
+            },
+            ip_address: req.ip
+        });
+
         res.status(200).json(updateResult.rows[0]);
 
     } catch (error) {

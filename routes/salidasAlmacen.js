@@ -5,9 +5,12 @@ const verifyToken = require('../middleware/verifyToken');
 // const checkRole = require('../middleware/checkRole'); // Descomentar si lo usas
 const router = express.Router();
 
+const { registrarAuditoria } = require('../servicios/auditService');
 
-
-router.post('/', async (req, res) => {
+// =======================================================
+// CREAR NUEVO VALE DE SALIDA MAESTRO
+// =======================================================
+router.post('/', verifyToken, async (req, res) => {
   const { 
     Tipo_Salida, 
     ID_Autobus, 
@@ -37,8 +40,27 @@ router.post('/', async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const idSalidaGenerado = result.rows[0].id_salida;
+
+    // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE VALE MAESTRO DE SALIDA
+    registrarAuditoria({
+        id_usuario: req.user.id, // Viene del verifyToken
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'salida_almacen',
+        id_recurso_afectado: idSalidaGenerado,
+        detalles_cambio: {
+            mensaje: 'Se generó un nuevo vale de salida maestro.',
+            tipo_salida: Tipo_Salida,
+            id_autobus: ID_Autobus || null,
+            id_vehiculo_particular: ID_Vehiculo_Particular || null,
+            solicitado_por: Solicitado_Por_ID,
+            kilometraje: Kilometraje_Autobus || null,
+            observaciones: Observaciones
+        },
+        ip_address: req.ip
+    });
     
-    res.status(201).json({ id_salida: result.rows[0].id_salida });
+    res.status(201).json({ id_salida: idSalidaGenerado });
 
   } catch (error) {
     console.error('Error al guardar el vale maestro de salida:', error);
@@ -46,7 +68,9 @@ router.post('/', async (req, res) => {
   }
 });
 
-
+// =======================================================
+// OBTENER DETALLES DE UN VALE DE SALIDA ESPECÍFICO
+// =======================================================
 router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   const { idSalida } = req.params;
   try {
@@ -80,7 +104,9 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   }
 });
 
-
+// =======================================================
+// OBTENER HISTORIAL DE VALES CON FILTROS (Paginado)
+// =======================================================
 router.get('/', verifyToken, async (req, res) => {
     const { 
         page = 1, 
@@ -97,8 +123,7 @@ router.get('/', verifyToken, async (req, res) => {
         // --- Construcción de Filtros ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            // Ahora sí, busca correctamente en el campo 'propietario' de la tabla 'vehiculos_particulares'
-            whereClauses.push(`(a.economico ILIKE $${params.length} OR s.tipo_salida ILIKE $${params.length} OR e.nombre ILIKE $${params.length} OR vp.propietario ILIKE $${params.length})`);
+            whereClauses.push(`(a.economico ILIKE $${params.length} OR s.tipo_salida ILIKE$${params.length} OR e.nombre ILIKE $${params.length} OR vp.propietario ILIKE$${params.length})`);
         }
         if (fechaInicio) {
             params.push(fechaInicio);
@@ -108,13 +133,12 @@ router.get('/', verifyToken, async (req, res) => {
             const fechaHasta = new Date(fechaFin);
             fechaHasta.setDate(fechaHasta.getDate() + 1);
             params.push(fechaHasta.toISOString().split('T')[0]);
-            whereClauses.push(`s.fecha_operacion < $${params.length}`);
+            whereClauses.push(`s.fecha_operacion <$${params.length}`);
         }
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
         // --- Consulta de Conteo Total ---
-        // CORREGIDO: LEFT JOIN a vehiculos_particulares
         const totalQuery = `
             SELECT COUNT(*) 
             FROM salida_almacen s

@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.dirname ? express.Router() : express.Router();
-const pool = require('../db'); // Ajusta la ruta a tu archivo de conexión a la BD
-const verifyToken = require('../middleware/verifyToken'); // Ajusta la ruta a tu middleware
+const pool = require('../db'); 
+const verifyToken = require('../middleware/verifyToken'); 
+
+const { registrarAuditoria } = require('../servicios/auditService');
 
 // =======================================================
 // OBTENER TODAS LAS PIEZAS RECUPERADAS (Para el Tablero Kanban)
@@ -35,11 +37,9 @@ router.get('/', verifyToken, async (req, res) => {
 // REGISTRAR NUEVA PIEZA AL YONQUE (Ingreso inicial)
 // =======================================================
 router.post('/', verifyToken, async (req, res) => {
-    // 🚀 NUEVO: Recibimos fecha_operacion desde el frontend
     const { id_refaccion, numero_serie, id_autobus_origen, motivo_falla, observaciones, fecha_operacion } = req.body;
 
     try {
-        // Fallback de seguridad: si no mandan fecha, usamos la del sistema
         const fechaBaja = fecha_operacion || new Date().toISOString().split('T')[0];
 
         const query = `
@@ -48,11 +48,28 @@ router.post('/', verifyToken, async (req, res) => {
             VALUES ($1, $2, $3, $4, $5, 'Yonque', $6) 
             RETURNING *;
         `;
-        // 🚀 Reemplazamos CURRENT_TIMESTAMP por la variable fechaBaja ($6)
         const values = [id_refaccion, numero_serie, id_autobus_origen, motivo_falla, observaciones, fechaBaja];
         
         const { rows } = await pool.query(query, values);
-        res.status(201).json({ message: 'Pieza ingresada al Yonque con éxito.', data: rows[0] });
+        const nuevaPieza = rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ALTA EN YONQUE
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'CREAR',
+            recurso_afectado: 'pieza_recuperada',
+            id_recurso_afectado: nuevaPieza.id_pieza_recuperada,
+            detalles_cambio: {
+                mensaje: 'Se ingresó una pieza (casco) al Yonque.',
+                estado: 'Yonque',
+                numero_serie: numero_serie,
+                id_autobus_origen: id_autobus_origen,
+                motivo_falla: motivo_falla
+            },
+            ip_address: req.ip
+        });
+
+        res.status(201).json({ message: 'Pieza ingresada al Yonque con éxito.', data: nuevaPieza });
     } catch (error) {
         console.error('Error al registrar pieza:', error);
         res.status(500).json({ message: 'Error al registrar la pieza.', error: error.message });
@@ -64,7 +81,6 @@ router.post('/', verifyToken, async (req, res) => {
 // =======================================================
 router.put('/:id', verifyToken, async (req, res) => {
   const { id } = req.params;
-  // 🚀 NUEVO: Agregamos id_proveedor_reparacion y fecha_operacion
   const { estado, id_autobus_destino, factura_reparacion, cantidad, costo_total_factura, id_proveedor_reparacion, fecha_operacion } = req.body;
 
   try {
@@ -83,6 +99,17 @@ router.put('/:id', verifyToken, async (req, res) => {
          WHERE id_pieza_recuperada = $4`,
         [estado, id_proveedor_reparacion, fechaOp, id]
       );
+
+      // 🛡️ AUDITORÍA
+      registrarAuditoria({
+          id_usuario: req.user.id,
+          tipo_accion: 'ACTUALIZAR',
+          recurso_afectado: 'pieza_recuperada',
+          id_recurso_afectado: id,
+          detalles_cambio: { estado_anterior: pieza.estado, estado_nuevo: estado, proveedor_reparacion: id_proveedor_reparacion },
+          ip_address: req.ip
+      });
+
       return res.json({ message: 'Pieza enviada a reparación.' });
     }
 
@@ -92,7 +119,6 @@ router.put('/:id', verifyToken, async (req, res) => {
       const costoTotal = parseFloat(costo_total_factura) || 0;
       const costoUnitario = cant > 0 ? (costoTotal / cant) : 0;
 
-      // A) Actualizar la pieza actual (la primera del lote) con su fecha de retorno
       await pool.query(
         `UPDATE pieza_recuperada 
          SET estado = $1, factura_reparacion = $2, costo_reparacion = $3, fecha_retorno = $4 
@@ -100,7 +126,6 @@ router.put('/:id', verifyToken, async (req, res) => {
         [estado, factura_reparacion, costoUnitario, fechaOp, id]
       );
 
-      // B) Si llegaron más de 1, clonar el resto automáticamente (copiando también la fecha manual)
       if (cant > 1) {
         for (let i = 1; i < cant; i++) {
           await pool.query(
@@ -108,19 +133,29 @@ router.put('/:id', verifyToken, async (req, res) => {
              (id_refaccion, estado, id_autobus_origen, id_proveedor_reparacion, costo_reparacion, factura_reparacion, fecha_baja, fecha_envio, fecha_retorno)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
             [
-              pieza.id_refaccion, 
-              estado, 
-              pieza.id_autobus_origen, 
-              pieza.id_proveedor_reparacion, 
-              costoUnitario, 
-              factura_reparacion, 
-              pieza.fecha_baja, 
-              pieza.fecha_envio,
-              fechaOp // Usamos la misma fecha de retorno para los clones
+              pieza.id_refaccion, estado, pieza.id_autobus_origen, pieza.id_proveedor_reparacion, 
+              costoUnitario, factura_reparacion, pieza.fecha_baja, pieza.fecha_envio, fechaOp
             ]
           );
         }
       }
+
+      // 🛡️ AUDITORÍA
+      registrarAuditoria({
+          id_usuario: req.user.id,
+          tipo_accion: 'ACTUALIZAR',
+          recurso_afectado: 'pieza_recuperada',
+          id_recurso_afectado: id,
+          detalles_cambio: { 
+              estado_anterior: pieza.estado, 
+              estado_nuevo: estado, 
+              costo_reparacion: costoUnitario, 
+              factura: factura_reparacion,
+              piezas_clonadas_agregadas: cant - 1
+          },
+          ip_address: req.ip
+      });
+
       return res.json({ message: `Se registraron ${cant} piezas en Stock Exitosamente.` });
     }
 
@@ -132,6 +167,17 @@ router.put('/:id', verifyToken, async (req, res) => {
          WHERE id_pieza_recuperada = $4`,
         [estado, id_autobus_destino, fechaOp, id]
       );
+
+      // 🛡️ AUDITORÍA
+      registrarAuditoria({
+          id_usuario: req.user.id,
+          tipo_accion: 'ACTUALIZAR',
+          recurso_afectado: 'pieza_recuperada',
+          id_recurso_afectado: id,
+          detalles_cambio: { estado_anterior: pieza.estado, estado_nuevo: estado, id_autobus_destino: id_autobus_destino },
+          ip_address: req.ip
+      });
+
       return res.json({ message: 'Pieza instalada correctamente.' });
     }
 
@@ -140,6 +186,17 @@ router.put('/:id', verifyToken, async (req, res) => {
       `UPDATE pieza_recuperada SET estado = $1 WHERE id_pieza_recuperada = $2`,
       [estado, id]
     );
+
+    // 🛡️ AUDITORÍA (Fallback)
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'pieza_recuperada',
+        id_recurso_afectado: id,
+        detalles_cambio: { estado_anterior: pieza.estado, estado_nuevo: estado },
+        ip_address: req.ip
+    });
+
     res.json({ message: 'Estado actualizado' });
 
   } catch (error) {
@@ -147,6 +204,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor al actualizar la pieza' });
   }
 });
+
 // =======================================================
 // ELIMINAR PIEZA (Si se registró por error)
 // =======================================================
@@ -159,19 +217,38 @@ router.delete('/:id', verifyToken, async (req, res) => {
         if (rows.length === 0) {
             return res.status(404).json({ message: 'Pieza no encontrada.' });
         }
+
+        const piezaEliminada = rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ELIMINAR
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ELIMINAR',
+            recurso_afectado: 'pieza_recuperada',
+            id_recurso_afectado: id,
+            detalles_cambio: { 
+                mensaje: 'Se eliminó una pieza recuperada del registro.',
+                estado_al_borrar: piezaEliminada.estado, 
+                numero_serie: piezaEliminada.numero_serie 
+            },
+            ip_address: req.ip
+        });
+
         res.status(200).json({ message: 'Registro de pieza eliminado correctamente.' });
     } catch (error) {
         console.error('Error al eliminar pieza:', error);
         res.status(500).json({ message: 'Error al eliminar la pieza.', error: error.message });
     }
 });
-//Revertir instalación por error (Ej. Se instaló en el bus equivocado)
+
+// =======================================================
+// REVERTIR INSTALACIÓN POR ERROR
+// =======================================================
 router.put('/:id/revertir-instalacion', verifyToken, async (req, res) => {
   const { id } = req.params;
   const { motivo_reversion, usuario_que_revierte } = req.body;
 
   try {
-    // 1. Obtenemos los datos actuales y hacemos JOIN para saber el número económico del autobús equivocado
     const pieza = await pool.query(`
       SELECT p.motivo_falla, a.economico as bus_destino 
       FROM pieza_recuperada p
@@ -184,12 +261,10 @@ router.put('/:id/revertir-instalacion', verifyToken, async (req, res) => {
     const busEquivocado = pieza.rows[0].bus_destino || 'Desconocido';
     const fallaAnterior = pieza.rows[0].motivo_falla || '';
 
-    // 2. Creamos la "Huella de Auditoría" anexándola al historial
     const fechaActual = new Date().toLocaleDateString();
     const huella = `\n[${fechaActual} - REVERTIDO POR ${usuario_que_revierte}]: Se desinstaló por error del Bus ${busEquivocado}. Motivo: ${motivo_reversion}`;
     const nuevoHistorial = fallaAnterior + huella;
 
-    // 3. ACTUALIZAMOS: Ahora sí usamos "id_autobus_destino" que es el nombre real en tu tabla
     await pool.query(`
       UPDATE pieza_recuperada 
       SET estado = 'Disponible', 
@@ -198,6 +273,21 @@ router.put('/:id/revertir-instalacion', verifyToken, async (req, res) => {
           motivo_falla = $1
       WHERE id_pieza_recuperada = $2
     `, [nuevoHistorial, id]);
+
+    // 🛡️ REGISTRO DE AUDITORÍA: REVERSIÓN DE INSTALACIÓN
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'pieza_recuperada',
+        id_recurso_afectado: id,
+        detalles_cambio: { 
+            accion: 'REVERSION_DE_INSTALACION',
+            bus_retirado: busEquivocado,
+            motivo: motivo_reversion,
+            usuario_mencionado: usuario_que_revierte
+        },
+        ip_address: req.ip
+    });
 
     res.json({ message: 'Instalación revertida y gasto anulado correctamente.' });
 

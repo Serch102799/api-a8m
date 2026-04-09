@@ -1,8 +1,13 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const pool = require('../db');
+const verifyToken = require('../middleware/verifyToken');
+
+const { registrarAuditoria } = require('../servicios/auditService');
 
 const router = express.Router();
+
+router.use(verifyToken);
 
 // ==============================
 // Validaciones
@@ -13,29 +18,10 @@ const validateProveedor = [
   body('Telefono').optional().isLength({ min: 7 }).withMessage('Teléfono inválido')
 ];
 
-// ==============================
-// Swagger tags
-// ==============================
-/**
- * @swagger
- * tags:
- *   name: Proveedores
- *   description: Gestión de proveedores
- */
 
 // ==============================
 // GET /api/proveedores
 // ==============================
-/**
- * @swagger
- * /api/proveedores:
- *   get:
- *     summary: Obtener todos los proveedores
- *     tags: [Proveedores]
- *     responses:
- *       200:
- *         description: Lista de proveedores
- */
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM Proveedor');
@@ -44,6 +30,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener los proveedores' });
   }
 });
+
 router.get('/buscar', async (req, res) => {
   const { term } = req.query;
   
@@ -63,27 +50,10 @@ router.get('/buscar', async (req, res) => {
     res.status(500).json({ message: 'Error al buscar proveedores' });
   }
 });
+
 // ==============================
 // GET /api/proveedores/:id
 // ==============================
-/**
- * @swagger
- * /api/proveedores/{id}:
- *   get:
- *     summary: Obtener un proveedor por ID
- *     tags: [Proveedores]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Proveedor encontrado
- *       404:
- *         description: Proveedor no encontrado
- */
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -97,24 +67,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/proveedores/nombre/{nombre}:
- *   get:
- *     summary: Buscar proveedor por nombre
- *     tags: [Proveedores]
- *     parameters:
- *       - in: path
- *         name: nombre
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Proveedor encontrado
- *       404:
- *         description: Proveedor no encontrado
- */
 router.get('/nombre/:nombre', async (req, res) => {
   const { nombre } = req.params;
   try {
@@ -134,39 +86,6 @@ router.get('/nombre/:nombre', async (req, res) => {
 // ==============================
 // POST /api/proveedores
 // ==============================
-/**
- * @swagger
- * /api/proveedores:
- *   post:
- *     summary: Crear un nuevo proveedor
- *     tags: [Proveedores]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - Nombre_Proveedor
- *             properties:
- *               Nombre_Proveedor:
- *                 type: string
- *               Contacto:
- *                 type: string
- *               Telefono:
- *                 type: string
- *               Correo:
- *                 type: string
- *               Direccion:
- *                 type: string
- *               RFC:
- *                 type: string
- *     responses:
- *       201:
- *         description: Proveedor creado exitosamente
- *       400:
- *         description: Datos inválidos
- */
 router.post('/', validateProveedor, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -183,7 +102,24 @@ router.post('/', validateProveedor, async (req, res) => {
        RETURNING *`,
       [Nombre_Proveedor, Contacto, Telefono, Correo, Direccion, RFC]
     );
-    res.status(201).json(result.rows[0]);
+    
+    const nuevoProveedor = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE PROVEEDOR
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'proveedor',
+        id_recurso_afectado: nuevoProveedor.id_proveedor, // En minúsculas porque pg devuelve las columnas así
+        detalles_cambio: {
+            mensaje: 'Se dio de alta un nuevo proveedor.',
+            nombre_proveedor: nuevoProveedor.nombre_proveedor,
+            rfc: nuevoProveedor.rfc
+        },
+        ip_address: req.ip
+    });
+
+    res.status(201).json(nuevoProveedor);
   } catch (error) {
     if (error.code === '23505') { 
       return res.status(400).json({ message: 'El nombre de este proveedor ya existe.' });
@@ -193,43 +129,8 @@ router.post('/', validateProveedor, async (req, res) => {
 });
 
 // ==============================
-// PUT /api/proveedores/:id
+// PUT /api/proveedores/nombre/:nombre
 // ==============================
-/**
- * @swagger
- * /api/proveedores/nombre/{nombre}:
- *   put:
- *     summary: Actualizar contacto, teléfono y correo del proveedor por nombre
- *     tags: [Proveedores]
- *     parameters:
- *       - in: path
- *         name: nombre
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - Contacto
- *               - Telefono
- *               - Correo
- *             properties:
- *               Contacto:
- *                 type: string
- *               Telefono:
- *                 type: string
- *               Correo:
- *                 type: string
- *     responses:
- *       200:
- *         description: Proveedor actualizado exitosamente
- *       404:
- *         description: Proveedor no encontrado
- */
 router.put('/nombre/:nombre', [
   body('Contacto').notEmpty().withMessage('Contacto es requerido'),
   body('Telefono').notEmpty().withMessage('Teléfono es requerido'),
@@ -258,35 +159,30 @@ router.put('/nombre/:nombre', [
       return res.status(404).json({ message: 'Proveedor no encontrado' });
     }
 
-    res.json({ message: 'Proveedor actualizado', proveedor: result.rows[0] });
+    const proveedorActualizado = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: EDICIÓN DE PROVEEDOR
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ACTUALIZAR',
+        recurso_afectado: 'proveedor',
+        id_recurso_afectado: proveedorActualizado.id_proveedor,
+        detalles_cambio: {
+            mensaje: 'Se actualizaron los datos de contacto del proveedor.',
+            datos_actualizados: { Contacto, Telefono, Correo }
+        },
+        ip_address: req.ip
+    });
+
+    res.json({ message: 'Proveedor actualizado', proveedor: proveedorActualizado });
   } catch (error) {
     res.status(500).json({ message: 'Error al actualizar el proveedor' });
   }
 });
 
-
-
 // ==============================
-// DELETE /api/proveedores/:id
+// DELETE /api/proveedores/nombre/:nombre
 // ==============================
-/**
- * @swagger
- * /api/proveedores/nombre/{nombre}:
- *   delete:
- *     summary: Eliminar proveedor por nombre
- *     tags: [Proveedores]
- *     parameters:
- *       - in: path
- *         name: nombre
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Proveedor eliminado exitosamente
- *       404:
- *         description: Proveedor no encontrado
- */
 router.delete('/nombre/:nombre', async (req, res) => {
   const { nombre } = req.params;
 
@@ -300,11 +196,25 @@ router.delete('/nombre/:nombre', async (req, res) => {
       return res.status(404).json({ message: 'Proveedor no encontrado' });
     }
 
-    res.json({ message: 'Proveedor eliminado exitosamente', proveedor: result.rows[0] });
+    const proveedorEliminado = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: ELIMINACIÓN DE PROVEEDOR
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ELIMINAR',
+        recurso_afectado: 'proveedor',
+        id_recurso_afectado: proveedorEliminado.id_proveedor,
+        detalles_cambio: {
+            mensaje: 'Se eliminó un proveedor del catálogo.',
+            nombre_proveedor: proveedorEliminado.nombre_proveedor
+        },
+        ip_address: req.ip
+    });
+
+    res.json({ message: 'Proveedor eliminado exitosamente', proveedor: proveedorEliminado });
   } catch (error) {
-    res.status(500).json({ message: 'Error al eliminar proveedor por nombre' });
+    res.status(500).json({ message: 'Error al eliminar proveedor por nombre. Verifica si tiene compras asociadas.' });
   }
 });
-
 
 module.exports = router;

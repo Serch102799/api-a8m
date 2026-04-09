@@ -3,6 +3,8 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 
+const { registrarAuditoria } = require('../servicios/auditService');
+
 router.use(verifyToken);
 
 // 1. OBTENER TODOS LOS SERVICIOS EXTERNOS
@@ -89,6 +91,7 @@ router.post('/', async (req, res) => {
     ];
     
     const result = await pool.query(query, values);
+    const nuevoServicio = result.rows[0];
     
     // Opcional pero recomendado: Actualizar el kilometraje del autobús en su tabla principal
     if (kilometraje_autobus) {
@@ -98,7 +101,24 @@ router.post('/', async (req, res) => {
       );
     }
 
-    res.status(201).json({ message: 'Servicio externo registrado con éxito', servicio: result.rows[0] });
+    // 🛡️ REGISTRO DE AUDITORÍA: NUEVO SERVICIO EXTERNO
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'servicio_externo',
+        id_recurso_afectado: nuevoServicio.id_servicio,
+        detalles_cambio: {
+            mensaje: 'Se registró una factura/nota de taller externo.',
+            id_autobus: id_autobus,
+            id_proveedor: id_proveedor,
+            descripcion: descripcion,
+            costo_total: costo_total,
+            factura_nota: factura_nota
+        },
+        ip_address: req.ip
+    });
+
+    res.status(201).json({ message: 'Servicio externo registrado con éxito', servicio: nuevoServicio });
   } catch (error) {
     console.error('Error al registrar servicio externo:', error);
     res.status(500).json({ message: 'Error al guardar el servicio externo', error: error.message });
@@ -115,7 +135,25 @@ router.put('/:id/cancelar', async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ message: 'Servicio no encontrado' });
     }
-    res.json({ message: 'Servicio cancelado correctamente', servicio: result.rows[0] });
+
+    const servicioCancelado = result.rows[0];
+
+    // 🛡️ REGISTRO DE AUDITORÍA: CANCELACIÓN (Soft Delete)
+    registrarAuditoria({
+        id_usuario: req.user.id,
+        tipo_accion: 'ELIMINAR', // Lo catalogamos como ELIMINAR para estandarizar las bajas
+        recurso_afectado: 'servicio_externo',
+        id_recurso_afectado: id,
+        detalles_cambio: {
+            mensaje: 'Se canceló el registro de un servicio externo.',
+            estado_nuevo: 'Cancelado',
+            descripcion_servicio: servicioCancelado.descripcion,
+            costo_anulado: servicioCancelado.costo_total
+        },
+        ip_address: req.ip
+    });
+
+    res.json({ message: 'Servicio cancelado correctamente', servicio: servicioCancelado });
   } catch (error) {
     console.error('Error al cancelar servicio:', error);
     res.status(500).json({ message: 'Error en el servidor' });

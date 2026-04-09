@@ -368,10 +368,18 @@ router.get('/:tipoReporte', async (req, res) => {
               ) t GROUP BY id_entrada
             ) sub ON ea.id_entrada = sub.id_entrada
             WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+            
             UNION ALL
             SELECT 'Sin Razón Social'::varchar as razon_social, pr.costo_reparacion as costo_total
             FROM pieza_recuperada pr
             WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
+            
+            -- ¡AQUÍ SUMAMOS LOS SERVICIOS EXTERNOS A LAS ENTRADAS (COMPRAS)!
+            UNION ALL
+            SELECT COALESCE(a.razon_social::varchar, 'Flota Administrativa') as razon_social, se.costo_total as costo_total
+            FROM servicio_externo se
+            LEFT JOIN autobus a ON se.id_autobus = a.id_autobus
+            WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
           )
           SELECT razon_social, SUM(costo_total) as total
           FROM Entradas GROUP BY razon_social HAVING SUM(costo_total) > 0 ORDER BY total DESC;

@@ -4,6 +4,7 @@ const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
 
+const { registrarAuditoria } = require('../servicios/auditService');
 
 router.get('/lista-simple', verifyToken, async (req, res) => {
     try {
@@ -79,10 +80,26 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], asyn
             'INSERT INTO rutas (nombre_ruta, descripcion, kilometraje_vuelta, vueltas_diarias_promedio) VALUES ($1, $2, $3, $4) RETURNING *',
             [nombre_ruta, descripcion || null, kilometraje_vuelta, vueltas_diarias_promedio || 1]
         );
-        res.status(201).json(result.rows[0]);
+        const nuevaRuta = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: CREAR RUTA
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'CREAR',
+            recurso_afectado: 'rutas',
+            id_recurso_afectado: nuevaRuta.id_ruta,
+            detalles_cambio: {
+                mensaje: 'Se dio de alta una nueva ruta operativa.',
+                nombre_ruta: nuevaRuta.nombre_ruta,
+                kilometraje: nuevaRuta.kilometraje_vuelta
+            },
+            ip_address: req.ip
+        });
+
+        res.status(201).json(nuevaRuta);
     } catch (error) {
         console.error('Error al crear la ruta:', error);
-        if (error.code === '23505') { // Violación de restricción única
+        if (error.code === '23505') { 
             res.status(400).json({ message: 'Una ruta con este nombre ya existe.' });
         } else {
             res.status(500).json({ message: 'Error al crear la ruta' });
@@ -118,7 +135,26 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'SuperUsuario'])], as
             return res.status(404).json({ message: 'Ruta no encontrada.' });
         }
         
-        res.json(result.rows[0]);
+        const rutaActualizada = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ACTUALIZAR RUTA
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'rutas',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se editaron los parámetros de la ruta.',
+                nuevos_datos: {
+                    nombre_ruta: rutaActualizada.nombre_ruta,
+                    kilometraje_vuelta: rutaActualizada.kilometraje_vuelta,
+                    vueltas_diarias_promedio: rutaActualizada.vueltas_diarias_promedio
+                }
+            },
+            ip_address: req.ip
+        });
+
+        res.json(rutaActualizada);
     } catch (error) {
         console.error('Error al actualizar la ruta:', error);
         if (error.code === '23505') {
@@ -151,6 +187,21 @@ router.delete('/:id', [verifyToken, checkRole(['Admin', 'SuperUsuario'])], async
             return res.status(404).json({ message: 'Ruta no encontrada.' });
         }
         
+        const rutaEliminada = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ELIMINAR RUTA
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ELIMINAR',
+            recurso_afectado: 'rutas',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se eliminó la ruta del catálogo.',
+                nombre_ruta: rutaEliminada.nombre_ruta
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Ruta eliminada exitosamente.' });
     } catch (error) {
         console.error('Error al eliminar la ruta:', error);

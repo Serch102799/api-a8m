@@ -3,12 +3,10 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const checkRole = require('../middleware/checkRole');
-/**
- * @swagger
- * tags:
- *   - name: Operadores
- *     description: Gestión del catálogo de operadores (chóferes)
- */
+
+const { registrarAuditoria } = require('../servicios/auditService');
+
+
 router.get('/buscar', verifyToken, async (req, res) => {
     const { term } = req.query;
     if (!term || term.length < 1) { return res.json([]); }
@@ -26,119 +24,36 @@ router.get('/buscar', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Error al buscar operadores' });
     }
 });
-/**
- * @swagger
- * /operadores:
- *   get:
- *     summary: Obtener lista paginada de operadores con cálculos de edad y antigüedad
- *     tags: [Operadores]
- *     parameters:
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *         description: Número de página
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 10
- *         description: Cantidad de elementos por página
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         description: Texto para filtrar por nombre, número de empleado o NSS
- *     responses:
- *       200:
- *         description: Lista de operadores
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 total:
- *                   type: integer
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Operador'
- *       500:
- *         description: Error interno del servidor
- * 
- *   post:
- *     summary: Crear un nuevo operador
- *     tags: [Operadores]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/OperadorInput'
- *     responses:
- *       201:
- *         description: Operador creado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Operador'
- *       400:
- *         description: Datos inválidos o duplicados
- *       500:
- *         description: Error interno del servidor
- */
+
 router.get('/', verifyToken, async (req, res) => {
-    // Agregamos 'estado' con valor por defecto 'activos'
     const { page = 1, limit = 10, search = '', estado = 'activos' } = req.query;
     
     try {
         const params = [];
-        const whereConditions = []; // Usamos un array para construir la consulta
+        const whereConditions = [];
 
-        // 1. Filtro de Búsqueda
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereConditions.push(`(nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE $${params.length} OR nss ILIKE $${params.length})`);
+            whereConditions.push(`(nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE$${params.length} OR nss ILIKE $${params.length})`);
         }
 
-        // 2. Filtro de Estado (¡NUEVO!)
         if (estado === 'activos') {
             whereConditions.push('esta_activo = true');
         } else if (estado === 'inactivos') {
             whereConditions.push('esta_activo = false');
         }
-        // Si estado es 'todos', no agregamos ninguna condición de estado
 
-        // Construimos el WHERE clause
         const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
         
-        // Query de conteo total
         const totalResult = await pool.query(`SELECT COUNT(*) FROM operadores ${whereClause}`, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
-        // Query de datos paginados
         const offset = (page - 1) * limit;
         const dataQuery = `
             SELECT 
-                id_operador,
-                nombre_completo,
-                numero_licencia,
-                tipo_licencia,
-                licencia_vencimiento,
-                numero_empleado,
-                estatus,
-                nss,
-                estatus_nss,
-                fecha_nacimiento,
-                fecha_ingreso,
-                -- Nuevos campos de estado
-                esta_activo,
-                fecha_baja,
-                motivo_baja,
-                -- Cálculos
+                id_operador, nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
+                numero_empleado, estatus, nss, estatus_nss, fecha_nacimiento, fecha_ingreso, 
+                esta_activo, fecha_baja, motivo_baja, 
                 EXTRACT(YEAR FROM AGE(CURRENT_DATE, fecha_nacimiento)) AS edad,
                 EXTRACT(YEAR FROM AGE(CURRENT_DATE, fecha_ingreso)) AS antiguedad_anios
             FROM operadores
@@ -154,32 +69,10 @@ router.get('/', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Error al obtener operadores' });
     }
 });
-/**
- * @swagger
- * /operadores:
- *   post:
- *     summary: Crear un nuevo operador
- *     tags: [Operadores]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/OperadorInput'
- *     responses:
- *       201:
- *         description: Operador creado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Operador'
- *       400:
- *         description: Datos inválidos o duplicados
- *       500:
- *         description: Error interno del servidor
- */
+
+// ============================================
+// POST / - Registro de nuevo operador
+// ============================================
 router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { 
         nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
@@ -202,7 +95,23 @@ router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req,
                 numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss
             ]
         );
-        res.status(201).json(result.rows[0]);
+        const nuevoOperador = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: ALTA DE OPERADOR
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'CREAR',
+            recurso_afectado: 'operadores',
+            id_recurso_afectado: nuevoOperador.id_operador,
+            detalles_cambio: { 
+                nombre: nuevoOperador.nombre_completo, 
+                numero_empleado: nuevoOperador.numero_empleado,
+                nss: nuevoOperador.nss 
+            },
+            ip_address: req.ip
+        });
+
+        res.status(201).json(nuevoOperador);
     } catch (error) {
         if (error.code === '23505') {
             return res.status(400).json({ message: 'El número de licencia, de empleado o NSS ya existe.' });
@@ -212,71 +121,11 @@ router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req,
     }
 });
 
-/**
- * @swagger
- * /operadores/{id}:
- *   put:
- *     summary: Actualizar un operador existente
- *     tags: [Operadores]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *         description: ID del operador a actualizar
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/OperadorInput'
- *     responses:
- *       200:
- *         description: Operador actualizado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Operador'
- *       400:
- *         description: Datos inválidos o duplicados
- *       404:
- *         description: Operador no encontrado
- *       500:
- *         description: Error interno del servidor
- * 
- *   delete:
- *     summary: Desactivar un operador (Soft Delete)
- *     tags: [Operadores]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *         description: ID del operador a desactivar
- *     responses:
- *       200:
- *         description: Operador desactivado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *       404:
- *         description: Operador no encontrado
- *       500:
- *         description: Error interno del servidor
- */
+// ============================================
+// PUT /:id - Actualizar Operador
+// ============================================
 router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
-    // Quitamos 'estatus' del body, ya no se gestiona aquí
     const { 
         nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
         numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
@@ -287,7 +136,6 @@ router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (re
     }
 
     try {
-        // Actualizamos la consulta y los parámetros para quitar 'estatus'
         const result = await pool.query(
             `UPDATE operadores SET
                 nombre_completo = $1, numero_licencia = $2, tipo_licencia = $3, 
@@ -303,7 +151,23 @@ router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (re
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Operador no encontrado.' });
         }
-        res.json(result.rows[0]);
+
+        const operadorActualizado = result.rows[0];
+
+        // 🛡️ REGISTRO DE AUDITORÍA: EDICIÓN DE OPERADOR
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'operadores',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se actualizaron los datos personales/laborales del operador.',
+                datos_nuevos: req.body // Guardamos el payload que se envió
+            },
+            ip_address: req.ip
+        });
+
+        res.json(operadorActualizado);
     } catch (error) {
         if (error.code === '23505') {
             return res.status(400).json({ message: 'El número de licencia, de empleado o NSS ya está en uso por otro operador.' });
@@ -312,29 +176,10 @@ router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (re
         res.status(500).json({ message: 'Error al actualizar el operador' });
     }
 });
-/**
- * @swagger
- * /operadores/{id}:
- *   delete:
- *     summary: Desactivar un operador (Soft Delete)
- *     tags: [Operadores]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *         description: ID del operador a desactivar
- *     responses:
- *       200:
- *         description: Operador desactivado exitosamente
- *       404:
- *         description: Operador no encontrado
- *       500:
- *         description: Error interno del servidor
- */
+
+// ============================================
+// PATCH /:id/desactivar - Baja de Operador
+// ============================================
 router.patch('/:id/desactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
     const { fecha_baja, motivo_baja } = req.body;
@@ -354,12 +199,31 @@ router.patch('/:id/desactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario']
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Operador no encontrado.' });
         }
+
+        // 🛡️ REGISTRO DE AUDITORÍA: BAJA LOGICA (ELIMINACIÓN)
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ELIMINAR', // Lo marcamos como ELIMINAR para estandarizar el Log
+            recurso_afectado: 'operadores',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                estado: 'INACTIVO',
+                fecha_baja: fecha_baja,
+                motivo_baja: motivo_baja
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Operador desactivado exitosamente.', operador: result.rows[0] });
     } catch (error) {
         console.error('Error al desactivar el operador:', error);
         res.status(500).json({ message: 'Error al desactivar el operador' });
     }
 });
+
+// ============================================
+// PATCH /:id/reactivar - Reingreso de Operador
+// ============================================
 router.patch('/:id/reactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
 
@@ -374,12 +238,25 @@ router.patch('/:id/reactivar', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Operador no encontrado.' });
         }
+
+        // 🛡️ REGISTRO DE AUDITORÍA: REINGRESO (RESTAURACIÓN)
+        registrarAuditoria({
+            id_usuario: req.user.id,
+            tipo_accion: 'ACTUALIZAR',
+            recurso_afectado: 'operadores',
+            id_recurso_afectado: id,
+            detalles_cambio: {
+                mensaje: 'Se reactivó al operador (Reingreso a la empresa).',
+                estado: 'ACTIVO'
+            },
+            ip_address: req.ip
+        });
+
         res.json({ message: 'Operador reactivado exitosamente.', operador: result.rows[0] });
     } catch (error) {
         console.error('Error al reactivar el operador:', error);
         res.status(500).json({ message: 'Error al reactivar el operador' });
     }
 });
-
 
 module.exports = router;

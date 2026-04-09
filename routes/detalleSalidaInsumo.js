@@ -3,50 +3,10 @@ const pool = require('../db');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 
-router.use(verifyToken);
-/**
- * @swagger
- * tags:
- *   name: DetalleSalidaInsumo
- *   description: Operaciones relacionadas con la salida de insumos
- */
+const { registrarAuditoria } = require('../servicios/auditService');
 
-/**
- * @swagger
- * /api/detalle-salida-insumo:
- *   post:
- *     summary: Crea un nuevo detalle de salida de insumo y actualiza el stock
- *     tags: [DetalleSalidaInsumo]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - id_salida
- *               - id_insumo
- *               - cantidad_usada
- *             properties:
- *               id_salida:
- *                 type: integer
- *                 description: ID de la salida de insumo
- *               id_insumo:
- *                 type: integer
- *                 description: ID del insumo a usar
- *               cantidad_usada:
- *                 type: number
- *                 description: Cantidad del insumo que se usa
- *     responses:
- *       201:
- *         description: Registro de salida de insumo creado exitosamente
- *       400:
- *         description: Error de validación
- *       500:
- *         description: Error en el servidor
- */
+router.use(verifyToken);
+
 router.post('/', async (req, res) => {
   const { id_salida, id_insumo, cantidad_usada } = req.body;
 
@@ -96,8 +56,29 @@ router.post('/', async (req, res) => {
       [id_salida, id_insumo, cantidad_usada, costoActual]
     );
 
+    const nuevoDetalleInsumo = detalleResult.rows[0];
+
     await client.query('COMMIT');
-    res.status(201).json(detalleResult.rows[0]);
+
+    // 🛡️ REGISTRO DE AUDITORÍA: DESPACHO DE INSUMO
+    registrarAuditoria({
+        id_usuario: req.user.id, // Obtenido gracias a verifyToken global
+        tipo_accion: 'CREAR',
+        recurso_afectado: 'detalle_salida_insumo',
+        id_recurso_afectado: nuevoDetalleInsumo.id_detalle_salida_insumo,
+        detalles_cambio: {
+            mensaje: 'Se despachó un insumo del almacén.',
+            id_salida_maestra: id_salida,
+            id_insumo: id_insumo,
+            cantidad_usada: cantidad_usada,
+            costo_al_momento: costoActual,
+            stock_anterior: stockActual,
+            stock_nuevo: stockActual - cantidad_usada
+        },
+        ip_address: req.ip
+    });
+
+    res.status(201).json(nuevoDetalleInsumo);
     
   } catch (error) {
     await client.query('ROLLBACK');
