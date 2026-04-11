@@ -23,13 +23,30 @@ router.get('/historico', verifyToken, async (req, res) => {
                 CASE 
                     WHEN dp.tipo_item = 'insumo' THEN (SELECT nombre FROM insumo WHERE id_insumo = dp.id_item)
                     WHEN dp.tipo_item = 'refaccion' THEN (SELECT nombre FROM refaccion WHERE id_refaccion = dp.id_item)
-                END as nombre_item
+                END as nombre_item,
+                
+                -- 💰 NUEVO: Costo unitario
+                COALESCE(
+                    CASE 
+                        WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                        WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                    END, 0
+                ) as costo_unitario,
+                
+                -- 💰 NUEVO: Valor monetario total (Responsabilidad Financiera)
+                (dp.cantidad_prestada * COALESCE(
+                    CASE 
+                        WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                        WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                    END, 0
+                )) as valor_total_prestado
+
             FROM prestamos p
             JOIN detalle_prestamo dp ON p.id_prestamo = dp.id_prestamo
             LEFT JOIN empleado e ON p.id_empleado_solicitante = e.id_empleado
             WHERE p.estado = 'CERRADO' OR dp.cantidad_devuelta >= dp.cantidad_prestada
             ORDER BY dp.fecha_devolucion DESC, p.fecha_prestamo DESC
-            LIMIT 500 -- Limitamos a los últimos 500 para no saturar la red
+            LIMIT 500
         `;
         const result = await pool.query(query);
         res.json(result.rows);
@@ -38,10 +55,10 @@ router.get('/historico', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Error al obtener préstamos históricos.' });
     }
 });
-// 1. REGISTRAR PRESTAMO
+
+// 2. REGISTRAR PRESTAMO
 router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
     const { nombre_solicitante_manual, items, observaciones } = req.body;
-    // items es un array: [{ tipo: 'insumo', id: 5, cantidad: 1 }, ...]
     const id_empleado_almacen = req.user.id;
 
     if (!nombre_solicitante_manual || !items || items.length === 0) {
@@ -52,7 +69,6 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
     try {
         await client.query('BEGIN');
 
-        // A. Crear la cabecera del préstamo
         const resPrestamo = await client.query(
             `INSERT INTO prestamos (nombre_solicitante_manual, id_empleado_almacen, observaciones) 
              VALUES ($1, $2, $3) RETURNING id_prestamo`,
@@ -60,9 +76,7 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
         );
         const idPrestamo = resPrestamo.rows[0].id_prestamo;
 
-        // B. Procesar cada ítem
         for (const item of items) {
-            // 1. Restar del Inventario (Físicamente ya no está)
             if (item.tipo === 'insumo') {
                 const checkStock = await client.query('SELECT stock_actual, nombre FROM insumo WHERE id_insumo = $1', [item.id]);
                 if (checkStock.rows[0].stock_actual < item.cantidad) {
@@ -85,7 +99,6 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
                 await client.query('UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_lote = $2', [item.cantidad, loteQuery.rows[0].id_lote]);
             }
 
-            // 2. Registrar el detalle del préstamo
             await client.query(
                 `INSERT INTO detalle_prestamo (id_prestamo, tipo_item, id_item, cantidad_prestada) 
                  VALUES ($1, $2, $3, $4)`,
@@ -95,7 +108,6 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
 
         await client.query('COMMIT');
 
-        // 🛡️ REGISTRO DE AUDITORÍA: NUEVO PRÉSTAMO DE HERRAMIENTA/REFACCIÓN
         registrarAuditoria({
             id_usuario: req.user.id,
             tipo_accion: 'CREAR',
@@ -120,16 +132,14 @@ router.post('/', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'
     }
 });
 
-// 2. REGISTRAR DEVOLUCIÓN (Retorno al Stock)
+// 3. REGISTRAR DEVOLUCIÓN
 router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'SuperUsuario'])], async (req, res) => {
     const { id_detalle_prestamo, cantidad_devuelta, estado_devolucion } = req.body;
-    // estado_devolucion: 'BUENO' (regresa al stock), 'ROTO/VACIO' (se descarta/consume)
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // A. Obtener info del detalle actual
         const detalleRes = await client.query('SELECT * FROM detalle_prestamo WHERE id_detalle_prestamo = $1', [id_detalle_prestamo]);
         if (detalleRes.rows.length === 0) throw new Error('Detalle de préstamo no encontrado.');
         
@@ -140,7 +150,6 @@ router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'Supe
             throw new Error(`No puedes devolver más de lo pendiente (${pendiente}).`);
         }
 
-        // B. Actualizar tabla detalle_prestamo
         await client.query(
             `UPDATE detalle_prestamo 
              SET cantidad_devuelta = cantidad_devuelta + $1, 
@@ -150,7 +159,6 @@ router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'Supe
             [cantidad_devuelta, estado_devolucion, id_detalle_prestamo]
         );
 
-        // C. LOGICA DE STOCK
         if (estado_devolucion === 'BUENO' && cantidad_devuelta > 0) {
             if (detalle.tipo_item === 'insumo') {
                 await client.query('UPDATE insumo SET stock_actual = stock_actual + $1 WHERE id_insumo = $2', [cantidad_devuelta, detalle.id_item]);
@@ -165,7 +173,6 @@ router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'Supe
             }
         }
 
-        // D. Verificar si el préstamo padre ya está completo
         const prestamoPadre = await client.query(
             `SELECT COUNT(*) as pendientes 
              FROM detalle_prestamo 
@@ -181,7 +188,6 @@ router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'Supe
 
         await client.query('COMMIT');
 
-        // 🛡️ REGISTRO DE AUDITORÍA: DEVOLUCIÓN DE PRÉSTAMO
         registrarAuditoria({
             id_usuario: req.user.id,
             tipo_accion: 'ACTUALIZAR',
@@ -210,7 +216,7 @@ router.put('/devolucion', [verifyToken, checkRole(['Admin', 'Almacenista', 'Supe
     }
 });
 
-// 3. OBTENER PRÉSTAMOS ACTIVOS (Para el tablero)
+// 4. OBTENER PRÉSTAMOS ACTIVOS (Para el tablero)
 router.get('/activos', verifyToken, async (req, res) => {
     try {
         const query = `
@@ -226,7 +232,24 @@ router.get('/activos', verifyToken, async (req, res) => {
                 CASE 
                     WHEN dp.tipo_item = 'insumo' THEN (SELECT nombre FROM insumo WHERE id_insumo = dp.id_item)
                     WHEN dp.tipo_item = 'refaccion' THEN (SELECT nombre FROM refaccion WHERE id_refaccion = dp.id_item)
-                END as nombre_item
+                END as nombre_item,
+                
+                -- 💰 NUEVO: Costo unitario
+                COALESCE(
+                    CASE 
+                        WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                        WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                    END, 0
+                ) as costo_unitario,
+                
+                -- 💰 NUEVO: Valor monetario total pendiente
+                ((dp.cantidad_prestada - dp.cantidad_devuelta) * COALESCE(
+                    CASE 
+                        WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                        WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                    END, 0
+                )) as valor_total_prestado
+
             FROM prestamos p
             JOIN detalle_prestamo dp ON p.id_prestamo = dp.id_prestamo
             LEFT JOIN empleado e ON p.id_empleado_solicitante = e.id_empleado
