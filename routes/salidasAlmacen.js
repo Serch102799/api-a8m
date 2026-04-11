@@ -123,7 +123,15 @@ router.get('/', verifyToken, async (req, res) => {
         // --- Construcción de Filtros ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(a.economico ILIKE $${params.length} OR s.tipo_salida ILIKE$${params.length} OR e.nombre ILIKE $${params.length} OR vp.propietario ILIKE$${params.length})`);
+            // 🛠️ CORRECCIÓN AQUÍ: Agregamos CAST(s.id_salida AS TEXT), observaciones, y reparamos los espacios del ILIKE
+            whereClauses.push(`(
+                CAST(s.id_salida AS TEXT) ILIKE $${params.length} OR 
+                a.economico ILIKE $${params.length} OR 
+                s.tipo_salida ILIKE $${params.length} OR 
+                e.nombre ILIKE $${params.length} OR 
+                vp.propietario ILIKE $${params.length} OR
+                s.observaciones ILIKE $${params.length}
+            )`);
         }
         if (fechaInicio) {
             params.push(fechaInicio);
@@ -133,7 +141,7 @@ router.get('/', verifyToken, async (req, res) => {
             const fechaHasta = new Date(fechaFin);
             fechaHasta.setDate(fechaHasta.getDate() + 1);
             params.push(fechaHasta.toISOString().split('T')[0]);
-            whereClauses.push(`s.fecha_operacion <$${params.length}`);
+            whereClauses.push(`s.fecha_operacion < $${params.length}`);
         }
 
         const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
