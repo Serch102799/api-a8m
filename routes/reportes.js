@@ -350,6 +350,82 @@ router.get('/:tipoReporte', async (req, res) => {
         return res.status(500).json({ message: 'Error al generar el reporte de gastos totales', error: error.message });
       }
 
+    case 'compras-proveedor':
+      if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
+      
+      // Obtenemos el proveedor si se quiere un reporte específico, si no, queda como null
+      const idProveedor = req.query.idProveedor || null; 
+      
+      const fFinCP = new Date(fechaFin); fFinCP.setDate(fFinCP.getDate() + 1);
+      const fFinStrCP = fFinCP.toISOString().split('T')[0];
+      
+      query = `
+        WITH Compras AS (
+          -- 1. Entradas de Almacen (Refacciones e Insumos)
+          SELECT 
+            ea.id_proveedor, 
+            COALESCE(p.nombre_proveedor, 'Sin Proveedor (Compras Internas)') as proveedor, 
+            ea.fecha_operacion as fecha, 
+            'Entrada Almacén' as tipo_compra, 
+            COALESCE(ea.factura_proveedor, ea.vale_interno, 'S/D') as documento, 
+            COALESCE(sub.total_entrada, 0) as costo_total
+          FROM entrada_almacen ea
+          LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
+          LEFT JOIN (
+            SELECT id_entrada, SUM(cantidad_recibida * costo_unitario_final) as total_entrada
+            FROM (
+              SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+              UNION ALL SELECT dei.id_entrada, dei.cantidad_recibida, dei.costo_unitario_final FROM detalle_entrada_insumo dei
+            ) t GROUP BY id_entrada
+          ) sub ON ea.id_entrada = sub.id_entrada
+          WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
+          
+          UNION ALL
+          
+          -- 2. Servicios Externos (Talleres)
+          SELECT 
+            se.id_proveedor, 
+            COALESCE(p.nombre_proveedor, 'Taller Externo No Registrado') as proveedor, 
+            se.fecha_servicio as fecha, 
+            'Servicio Externo' as tipo_compra, 
+            COALESCE(se.factura_nota, 'S/D') as documento, 
+            se.costo_total as costo_total
+          FROM servicio_externo se
+          LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
+          
+          UNION ALL
+          
+          -- 3. Reparaciones de Piezas (Cascos/Yonque)
+          SELECT 
+            pr.id_proveedor_reparacion as id_proveedor, 
+            COALESCE(p.nombre_proveedor, 'Reparador No Registrado') as proveedor, 
+            pr.fecha_retorno as fecha, 
+            'Reparación de Casco' as tipo_compra, 
+            COALESCE(pr.factura_reparacion, 'S/D') as documento, 
+            pr.costo_reparacion as costo_total
+          FROM pieza_recuperada pr
+          LEFT JOIN proveedor p ON pr.id_proveedor_reparacion = p.id_proveedor
+          WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
+        )
+        SELECT 
+          id_proveedor, 
+          proveedor, 
+          SUM(costo_total) as total_comprado,
+          json_agg(json_build_object(
+            'fecha', fecha, 
+            'tipo_compra', tipo_compra, 
+            'documento', documento, 
+            'costo_total', costo_total
+          ) ORDER BY fecha DESC) as detalles
+        FROM Compras
+        WHERE ($3::int IS NULL OR id_proveedor = $3::int)
+        GROUP BY id_proveedor, proveedor 
+        ORDER BY total_comprado DESC;
+      `;
+      params = [fechaInicio, fFinStrCP, idProveedor];
+      break;
+      
     case 'dashboard-kpis':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
       const fFinDash = new Date(fechaFin); fFinDash.setDate(fFinDash.getDate() + 1);

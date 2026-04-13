@@ -123,7 +123,6 @@ router.get('/', verifyToken, async (req, res) => {
         // --- Construcción de Filtros ---
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            // 🛠️ CORRECCIÓN AQUÍ: Agregamos CAST(s.id_salida AS TEXT), observaciones, y reparamos los espacios del ILIKE
             whereClauses.push(`(
                 CAST(s.id_salida AS TEXT) ILIKE $${params.length} OR 
                 a.economico ILIKE $${params.length} OR 
