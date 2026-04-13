@@ -353,9 +353,7 @@ router.get('/:tipoReporte', async (req, res) => {
     case 'compras-proveedor':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
       
-      // Obtenemos el proveedor si se quiere un reporte específico, si no, queda como null
       const idProveedor = req.query.idProveedor || null; 
-      
       const fFinCP = new Date(fechaFin); fFinCP.setDate(fFinCP.getDate() + 1);
       const fFinStrCP = fFinCP.toISOString().split('T')[0];
       
@@ -368,7 +366,8 @@ router.get('/:tipoReporte', async (req, res) => {
             ea.fecha_operacion as fecha, 
             'Entrada Almacén' as tipo_compra, 
             COALESCE(ea.factura_proveedor, ea.vale_interno, 'S/D') as documento, 
-            COALESCE(sub.total_entrada, 0) as costo_total
+            COALESCE(sub.total_entrada, 0) as costo_total,
+            COALESCE(arts.lista_articulos, 'Varios / No especificado') as articulos
           FROM entrada_almacen ea
           LEFT JOIN proveedor p ON ea.id_proveedor = p.id_proveedor
           LEFT JOIN (
@@ -378,6 +377,15 @@ router.get('/:tipoReporte', async (req, res) => {
               UNION ALL SELECT dei.id_entrada, dei.cantidad_recibida, dei.costo_unitario_final FROM detalle_entrada_insumo dei
             ) t GROUP BY id_entrada
           ) sub ON ea.id_entrada = sub.id_entrada
+          LEFT JOIN (
+             -- 🛠️ AQUI CONCATENAMOS TODOS LOS ARTICULOS DE LA COMPRA
+             SELECT id_entrada, string_agg(nombre_item, ', ') as lista_articulos
+             FROM (
+                SELECT de.id_entrada, r.nombre as nombre_item FROM detalle_entrada de JOIN refaccion r ON de.id_refaccion = r.id_refaccion
+                UNION ALL
+                SELECT dei.id_entrada, i.nombre as nombre_item FROM detalle_entrada_insumo dei JOIN insumo i ON dei.id_insumo = i.id_insumo
+             ) sub_arts GROUP BY id_entrada
+          ) arts ON ea.id_entrada = arts.id_entrada
           WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2
           
           UNION ALL
@@ -389,7 +397,8 @@ router.get('/:tipoReporte', async (req, res) => {
             se.fecha_servicio as fecha, 
             'Servicio Externo' as tipo_compra, 
             COALESCE(se.factura_nota, 'S/D') as documento, 
-            se.costo_total as costo_total
+            se.costo_total as costo_total,
+            se.descripcion as articulos -- 🛠️ Usamos la descripción del trabajo
           FROM servicio_externo se
           LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
           WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
@@ -403,7 +412,8 @@ router.get('/:tipoReporte', async (req, res) => {
             pr.fecha_retorno as fecha, 
             'Reparación de Casco' as tipo_compra, 
             COALESCE(pr.factura_reparacion, 'S/D') as documento, 
-            pr.costo_reparacion as costo_total
+            pr.costo_reparacion as costo_total,
+            (SELECT nombre FROM refaccion WHERE id_refaccion = pr.id_refaccion) as articulos -- 🛠️ Traemos el nombre de la pieza
           FROM pieza_recuperada pr
           LEFT JOIN proveedor p ON pr.id_proveedor_reparacion = p.id_proveedor
           WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
@@ -416,7 +426,8 @@ router.get('/:tipoReporte', async (req, res) => {
             'fecha', fecha, 
             'tipo_compra', tipo_compra, 
             'documento', documento, 
-            'costo_total', costo_total
+            'costo_total', costo_total,
+            'articulos', articulos -- 📦 AÑADIDO AL JSON
           ) ORDER BY fecha DESC) as detalles
         FROM Compras
         WHERE ($3::int IS NULL OR id_proveedor = $3::int)
