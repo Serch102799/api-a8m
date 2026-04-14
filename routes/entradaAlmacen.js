@@ -61,7 +61,7 @@ router.get('/', verifyToken, async (req, res) => {
         
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(p.nombre_proveedor ILIKE $${params.length} OR ea.factura_proveedor ILIKE$${params.length} OR e.nombre ILIKE $${params.length})`);
+            whereClauses.push(`(p.nombre_proveedor ILIKE $${params.length} OR ea.factura_proveedor ILIKE $${params.length} OR e.nombre ILIKE $${params.length})`);
         }
         if (fechaInicio) {
             params.push(fechaInicio);
