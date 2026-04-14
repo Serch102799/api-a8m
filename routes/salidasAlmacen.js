@@ -75,11 +75,15 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   const { idSalida } = req.params;
   try {
     const query = `
-      SELECT id_detalle, nombre_item, cantidad, tipo_item, costo_unitario, cantidad_devuelta FROM (
+      SELECT id_detalle, nombre_item, numero_parte, cantidad, tipo_item, costo_unitario, cantidad_devuelta FROM (
         SELECT 
-          ds.id_detalle_salida as id_detalle, r.nombre as nombre_item, 
-          ds.cantidad_despachada as cantidad, 'refaccion' as tipo_item,
-          l.costo_unitario_final as costo_unitario, ds.cantidad_devuelta
+          ds.id_detalle_salida as id_detalle, 
+          r.nombre as nombre_item, 
+          r.numero_parte as numero_parte, -- 🛠️ NUEVO: Traemos el número de parte
+          ds.cantidad_despachada as cantidad, 
+          'refaccion' as tipo_item,
+          l.costo_unitario_final as costo_unitario, 
+          ds.cantidad_devuelta
         FROM detalle_salida ds
         JOIN lote_refaccion l ON ds.id_lote = l.id_lote
         JOIN refaccion r ON l.id_refaccion = r.id_refaccion
@@ -88,9 +92,13 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
         UNION ALL
 
         SELECT 
-          dsi.id_detalle_salida_insumo as id_detalle, i.nombre as nombre_item, 
-          dsi.cantidad_usada as cantidad, 'insumo' as tipo_item,
-          dsi.costo_al_momento as costo_unitario, dsi.cantidad_devuelta
+          dsi.id_detalle_salida_insumo as id_detalle, 
+          i.nombre as nombre_item, 
+          'S/N' as numero_parte, -- 🛠️ NUEVO: Los insumos no suelen tener número de parte
+          dsi.cantidad_usada as cantidad, 
+          'insumo' as tipo_item,
+          dsi.costo_al_momento as costo_unitario, 
+          dsi.cantidad_devuelta
         FROM detalle_salida_insumo dsi
         JOIN insumo i ON dsi.id_insumo = i.id_insumo
         WHERE dsi.id_salida = $1
@@ -103,7 +111,6 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error al obtener detalles de la salida' });
   }
 });
-
 // =======================================================
 // OBTENER HISTORIAL DE VALES CON FILTROS (Paginado)
 // =======================================================
