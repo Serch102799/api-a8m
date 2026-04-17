@@ -23,7 +23,7 @@ router.get('/', async (req, res) => {
 
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereClauses.push(`(nombre ILIKE $${params.length} OR marca ILIKE$${params.length})`);
+            whereClauses.push(`(nombre ILIKE $${params.length} OR marca ILIKE $${params.length})`);
         }
 
         if (tipo.trim()) {

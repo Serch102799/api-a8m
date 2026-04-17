@@ -82,8 +82,9 @@ router.get('/', async (req, res) => {
 
 router.get('/lista-simple', verifyToken, async (req, res) => {
   try {
+    // 🛠️ SE AGREGÓ "modelo"
     const result = await pool.query(
-      'SELECT id_autobus, economico, kilometraje_actual FROM autobus ORDER BY economico ASC'
+      'SELECT id_autobus, economico, modelo, kilometraje_actual FROM autobus ORDER BY economico ASC'
     );
     res.json(result.rows);
   } catch (error) {
@@ -101,8 +102,9 @@ router.get('/buscar', verifyToken, async (req, res) => {
 
   try {
     const searchTerm = `%${term}%`;
+    // 🛠️ SE AGREGÓ "modelo" A LA CONSULTA PARA QUE EL KPI DE DIÉSEL LO PUEDA USAR
     const result = await pool.query(
-      `SELECT id_autobus, economico, kilometraje_actual,kilometraje_ultima_carga  
+      `SELECT id_autobus, economico, modelo, kilometraje_actual, kilometraje_ultima_carga  
        FROM autobus 
        WHERE economico ILIKE $1 OR marca ILIKE $1 OR placa ILIKE $1 OR vin ILIKE $1
        ORDER BY economico ASC
