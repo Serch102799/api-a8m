@@ -102,7 +102,6 @@ router.get('/buscar', verifyToken, async (req, res) => {
 
   try {
     const searchTerm = `%${term}%`;
-    // 🛠️ SE AGREGÓ "modelo" A LA CONSULTA PARA QUE EL KPI DE DIÉSEL LO PUEDA USAR
     const result = await pool.query(
       `SELECT id_autobus, economico, modelo, kilometraje_actual, kilometraje_ultima_carga  
        FROM autobus 
