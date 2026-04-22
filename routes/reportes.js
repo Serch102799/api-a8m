@@ -436,6 +436,88 @@ router.get('/:tipoReporte', async (req, res) => {
       `;
       params = [fechaInicio, fFinStrCP, idProveedor];
       break;
+
+    // =======================================================
+    // REPORTE ANALÍTICO DE SALIDAS (EL RESPALDO DEL DASHBOARD)
+    // =======================================================
+    case 'detalle-gastos-salidas':
+      if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
+      
+      const fFinDGS = new Date(fechaFin); fFinDGS.setDate(fFinDGS.getDate() + 1);
+      const fFinStrDGS = fFinDGS.toISOString().split('T')[0];
+
+      query = `
+        WITH DetalleSalidas AS (
+          -- 1. SALIDAS A AUTOBUSES Y FLOTA ADMIN (REFACCIONES)
+          SELECT sa.fecha_operacion as fecha, 
+                 'Refacción' as tipo_movimiento, 
+                 r.nombre as articulo, 
+                 CASE WHEN sa.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as categoria_grafica,
+                 CASE WHEN sa.id_vehiculo_particular IS NOT NULL THEN 'Auto: ' || vp.propietario ELSE 'Bus: ' || a.economico END as responsable_destino,
+                 (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad,
+                 ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds
+          JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
+          JOIN lote_refaccion l ON ds.id_lote = l.id_lote
+          JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
+          LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus
+          LEFT JOIN vehiculos_particulares vp ON sa.id_vehiculo_particular = vp.id_vehiculo
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+
+          UNION ALL
+
+          -- 2. SALIDAS A AUTOBUSES Y FLOTA ADMIN (INSUMOS)
+          SELECT sa.fecha_operacion as fecha, 
+                 'Insumo' as tipo_movimiento, 
+                 i.nombre as articulo, 
+                 CASE WHEN sa.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as categoria_grafica,
+                 CASE WHEN sa.id_vehiculo_particular IS NOT NULL THEN 'Auto: ' || vp.propietario ELSE 'Bus: ' || a.economico END as responsable_destino,
+                 (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad,
+                 ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          FROM detalle_salida_insumo dsi
+          JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+          JOIN insumo i ON dsi.id_insumo = i.id_insumo
+          LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus
+          LEFT JOIN vehiculos_particulares vp ON sa.id_vehiculo_particular = vp.id_vehiculo
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
+
+          UNION ALL
+
+          -- 3. SERVICIOS EXTERNOS (TALLERES)
+          SELECT se.fecha_servicio as fecha, 
+                 'Servicio Externo' as tipo_movimiento, 
+                 se.descripcion as articulo,
+                 COALESCE(a.razon_social::varchar, 'Sin Razón Social') as categoria_grafica,
+                 'Bus: ' || a.economico as responsable_destino,
+                 1 as cantidad,
+                 se.costo_total as costo_total
+          FROM servicio_externo se
+          JOIN autobus a ON se.id_autobus = a.id_autobus
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
+
+          UNION ALL
+
+          -- 4. PRÉSTAMOS DE HERRAMIENTAS Y REFACCIONES
+          SELECT p.fecha_prestamo as fecha, 
+                 'Préstamo' as tipo_movimiento, 
+                 CASE WHEN dp.tipo_item = 'insumo' THEN (SELECT nombre FROM insumo WHERE id_insumo = dp.id_item)
+                      WHEN dp.tipo_item = 'refaccion' THEN (SELECT nombre FROM refaccion WHERE id_refaccion = dp.id_item) END as articulo,
+                 'Préstamos' as categoria_grafica,
+                 'Persona: ' || COALESCE(p.nombre_solicitante_manual, e.nombre, 'Desconocido') as responsable_destino,
+                 dp.cantidad_prestada as cantidad,
+                 (dp.cantidad_prestada * COALESCE(
+                       CASE WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                            WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                       END, 0)) as costo_total
+          FROM prestamos p
+          JOIN detalle_prestamo dp ON p.id_prestamo = dp.id_prestamo
+          LEFT JOIN empleado e ON p.id_empleado_solicitante = e.id_empleado
+          WHERE p.fecha_prestamo >= $1 AND p.fecha_prestamo < $2
+        )
+        SELECT * FROM DetalleSalidas ORDER BY fecha DESC;
+      `;
+      params = [fechaInicio, fFinStrDGS];
+      break;
       
     case 'dashboard-kpis':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
@@ -443,6 +525,9 @@ router.get('/:tipoReporte', async (req, res) => {
       const fFinStrDash = fFinDash.toISOString().split('T')[0];
 
       try {
+        // =======================================================
+        // 🟢 COMPRAS / ENTRADAS (Incluye Devoluciones de Préstamos)
+        // =======================================================
         const queryComprasPie = `
           WITH Entradas AS (
             SELECT COALESCE(ea.razon_social::varchar, 'Sin Razón Social') as razon_social, COALESCE(sub.total_entrada, 0) as costo_total
@@ -461,17 +546,33 @@ router.get('/:tipoReporte', async (req, res) => {
             FROM pieza_recuperada pr
             WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
             
-            -- ¡AQUÍ SUMAMOS LOS SERVICIOS EXTERNOS A LAS ENTRADAS (COMPRAS)!
             UNION ALL
             SELECT COALESCE(a.razon_social::varchar, 'Flota Administrativa') as razon_social, se.costo_total as costo_total
             FROM servicio_externo se
             LEFT JOIN autobus a ON se.id_autobus = a.id_autobus
             WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
+
+            -- 🚀 NUEVO: DEVOLUCIÓN DE PRÉSTAMOS (INGRESOS A ALMACÉN)
+            UNION ALL
+            SELECT 'Devolución de Préstamos'::varchar as razon_social, 
+                   (dp.cantidad_devuelta * COALESCE(
+                       CASE 
+                           WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                           WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                       END, 0
+                   )) as costo_total
+            FROM detalle_prestamo dp
+            WHERE dp.fecha_devolucion >= $1 AND dp.fecha_devolucion < $2
+              AND dp.estado_devolucion = 'BUENO'
+              AND dp.cantidad_devuelta > 0
           )
           SELECT razon_social, SUM(costo_total) as total
           FROM Entradas GROUP BY razon_social HAVING SUM(costo_total) > 0 ORDER BY total DESC;
         `;
 
+        // =======================================================
+        // 🔴 GASTOS / SALIDAS (Incluye Préstamos Otorgados)
+        // =======================================================
         const queryGastosPie = `
           WITH Gastos AS (
             SELECT sa.id_autobus, sa.id_vehiculo_particular, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
@@ -485,13 +586,35 @@ router.get('/:tipoReporte', async (req, res) => {
             UNION ALL
             SELECT pr.id_autobus_destino as id_autobus, NULL as id_vehiculo_particular, pr.costo_reparacion as costo_total
             FROM pieza_recuperada pr WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0
+          ),
+          AgrupadoNormal AS (
+            SELECT 
+              CASE WHEN g.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as razon_social, 
+              SUM(g.costo_total) as total
+            FROM Gastos g LEFT JOIN autobus a ON g.id_autobus = a.id_autobus 
+            GROUP BY CASE WHEN g.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END
+          ),
+          SalidasTotales AS (
+            SELECT razon_social, total FROM AgrupadoNormal
+            
+            -- 🚀 NUEVO: MATERIAL ENTREGADO EN PRÉSTAMO (SALIDA DE ALMACÉN)
+            UNION ALL
+            SELECT 'Préstamos'::varchar as razon_social, 
+                   SUM(dp.cantidad_prestada * COALESCE(
+                       CASE 
+                           WHEN dp.tipo_item = 'insumo' THEN (SELECT costo_unitario_promedio FROM insumo WHERE id_insumo = dp.id_item)
+                           WHEN dp.tipo_item = 'refaccion' THEN (SELECT costo_unitario_final FROM lote_refaccion WHERE id_refaccion = dp.id_item ORDER BY fecha_ingreso DESC LIMIT 1)
+                       END, 0
+                   )) as total
+            FROM prestamos p
+            JOIN detalle_prestamo dp ON p.id_prestamo = dp.id_prestamo
+            WHERE p.fecha_prestamo >= $1 AND p.fecha_prestamo < $2
           )
-          SELECT 
-            CASE WHEN g.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as razon_social, 
-            SUM(g.costo_total) as total
-          FROM Gastos g LEFT JOIN autobus a ON g.id_autobus = a.id_autobus 
-          GROUP BY CASE WHEN g.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END 
-          HAVING SUM(g.costo_total) > 0 ORDER BY total DESC;
+          SELECT razon_social, SUM(total) as total 
+          FROM SalidasTotales 
+          GROUP BY razon_social 
+          HAVING SUM(total) > 0 
+          ORDER BY total DESC;
         `;
 
         const [comprasRes, gastosRes] = await Promise.all([
@@ -520,5 +643,6 @@ router.get('/:tipoReporte', async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
+
 
 module.exports = router;
