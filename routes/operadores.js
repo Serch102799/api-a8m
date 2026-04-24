@@ -27,14 +27,14 @@ router.get('/buscar', verifyToken, async (req, res) => {
 
 router.get('/', verifyToken, async (req, res) => {
     const { page = 1, limit = 10, search = '', estado = 'activos' } = req.query;
-    
+
     try {
         const params = [];
         const whereConditions = [];
 
         if (search.trim()) {
             params.push(`%${search.trim()}%`);
-            whereConditions.push(`(nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE$${params.length} OR nss ILIKE $${params.length})`);
+            whereConditions.push(`(nombre_completo ILIKE $${params.length} OR numero_empleado ILIKE $${params.length} OR nss ILIKE $${params.length})`);
         }
 
         if (estado === 'activos') {
@@ -44,7 +44,7 @@ router.get('/', verifyToken, async (req, res) => {
         }
 
         const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-        
+
         const totalResult = await pool.query(`SELECT COUNT(*) FROM operadores ${whereClause}`, params);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
 
@@ -62,7 +62,7 @@ router.get('/', verifyToken, async (req, res) => {
             LIMIT $${params.length + 1} OFFSET $${params.length + 2}
         `;
         const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
-        
+
         res.json({ total: totalItems, data: dataResult.rows });
     } catch (error) {
         console.error('Error al obtener operadores:', error);
@@ -74,9 +74,9 @@ router.get('/', verifyToken, async (req, res) => {
 // POST / - Registro de nuevo operador
 // ============================================
 router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
-    const { 
-        nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
-        numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
+    const {
+        nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento,
+        numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss
     } = req.body;
 
     if (!nombre_completo) {
@@ -91,7 +91,7 @@ router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req,
              )
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
             [
-                nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
+                nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento,
                 numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss
             ]
         );
@@ -103,10 +103,10 @@ router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req,
             tipo_accion: 'CREAR',
             recurso_afectado: 'operadores',
             id_recurso_afectado: nuevoOperador.id_operador,
-            detalles_cambio: { 
-                nombre: nuevoOperador.nombre_completo, 
+            detalles_cambio: {
+                nombre: nuevoOperador.nombre_completo,
                 numero_empleado: nuevoOperador.numero_empleado,
-                nss: nuevoOperador.nss 
+                nss: nuevoOperador.nss
             },
             ip_address: req.ip
         });
@@ -126,11 +126,11 @@ router.post('/', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req,
 // ============================================
 router.put('/:id', [verifyToken, checkRole(['RRHH', 'SuperUsuario'])], async (req, res) => {
     const { id } = req.params;
-    const { 
-        nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento, 
-        numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss 
+    const {
+        nombre_completo, numero_licencia, tipo_licencia, licencia_vencimiento,
+        numero_empleado, fecha_nacimiento, fecha_ingreso, nss, estatus_nss
     } = req.body;
-    
+
     if (!nombre_completo) {
         return res.status(400).json({ message: 'El nombre completo es requerido.' });
     }
