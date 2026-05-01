@@ -30,17 +30,36 @@ router.get('/', async (req, res) => {
 router.get('/kpi-pendientes', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT COUNT(*) as total_pendientes
+      SELECT 
+        -- 🔴 URGENTES: Ya se pasó la fecha (< HOY) o ya se pasó el Kilometraje (Actual >= Límite)
+        SUM(CASE WHEN 
+          sp.fecha_proximo_servicio < CURRENT_DATE 
+          OR a.kilometraje_ultima_carga >= sp.km_proximo_servicio 
+        THEN 1 ELSE 0 END) as urgentes,
+
+        -- 🟡 PRÓXIMOS: Vence en los próximos 30 días o le faltan <= 2000 km
+        -- OJO: Condicionamos que NO estén ya vencidos (>= CURRENT_DATE y < km_proximo_servicio)
+        SUM(CASE WHEN 
+          (
+            (sp.fecha_proximo_servicio >= CURRENT_DATE AND sp.fecha_proximo_servicio <= CURRENT_DATE + INTERVAL '30 days')
+            OR 
+            (sp.km_proximo_servicio - a.kilometraje_ultima_carga <= 2000)
+          )
+          AND sp.fecha_proximo_servicio >= CURRENT_DATE 
+          AND a.kilometraje_ultima_carga < sp.km_proximo_servicio
+        THEN 1 ELSE 0 END) as proximos
+
       FROM servicio_preventivo sp
       JOIN autobus a ON sp.id_autobus = a.id_autobus
       WHERE sp.estado = 'Pendiente'
-      AND (
-        sp.fecha_proximo_servicio <= CURRENT_DATE + INTERVAL '30 days'
-        OR a.kilometraje_ultima_carga >= (sp.km_proximo_servicio - 500) -- Avisa 500km antes
-      )
     `);
-    res.json({ pendientes: parseInt(result.rows[0].total_pendientes) });
+
+    res.json({
+      urgentes: parseInt(result.rows[0].urgentes || 0),
+      proximos: parseInt(result.rows[0].proximos || 0)
+    });
   } catch (error) {
+    console.error('Error KPI Servicios:', error);
     res.status(500).json({ message: 'Error al calcular KPI de servicios' });
   }
 });

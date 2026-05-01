@@ -93,7 +93,7 @@ router.get('/stats', verifyToken, async (req, res) => {
     const stockBajoInsumosPromise = pool.query('SELECT COUNT(*) FROM insumo WHERE stock_actual <= stock_minimo AND stock_minimo > 0');
     const valorInventarioRefaccionesPromise = pool.query('SELECT SUM(cantidad_disponible * costo_unitario_final) AS valor_total FROM lote_refaccion');
     const valorInventarioInsumosPromise = pool.query('SELECT SUM(stock_actual * costo_unitario_promedio) AS valor_total FROM insumo');
-    
+
     // 🚀 NUEVO: Consultamos el valor de las piezas recuperadas disponibles
     const valorInventarioRecuperadosPromise = pool.query("SELECT COALESCE(SUM(costo_reparacion), 0) AS valor_total FROM pieza_recuperada WHERE estado = 'Disponible'");
 
@@ -149,7 +149,7 @@ router.get('/stats', verifyToken, async (req, res) => {
       ORDER BY fecha_operacion DESC
       LIMIT 5
     `);
-    
+
     // 🚀 NUEVO: Agregamos valorInventarioRecuperadosPromise al Promise.all
     const [
       totalRefaccionesRes, totalInsumosRes, totalPiezasRefaccionesRes, stockBajoRefaccionesRes, stockBajoInsumosRes,
@@ -164,8 +164,8 @@ router.get('/stats', verifyToken, async (req, res) => {
     ]);
 
     // 🚀 NUEVO: Sumamos los 3 valores para el Gran Total del Inventario
-    const valorTotalInventario = 
-      (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) + 
+    const valorTotalInventario =
+      (parseFloat(valorInventarioRefaccionesRes.rows[0]?.valor_total) || 0) +
       (parseFloat(valorInventarioInsumosRes.rows[0]?.valor_total) || 0) +
       (parseFloat(valorInventarioRecuperadosRes.rows[0]?.valor_total) || 0);
 
@@ -229,12 +229,93 @@ router.get('/top-autobuses', async (req, res) => {
 
     // Pasamos las variables $1 y $2 a la consulta
     const result = await pool.query(query, [fechaInicio, fechaFin]);
-    
+
     res.json(result.rows);
 
   } catch (error) {
     console.error('Error al obtener el Top de Autobuses Dinámico:', error);
     res.status(500).json({ message: 'Error interno al calcular los gastos de autobuses.' });
+  }
+});
+router.get('/proyeccion-compras', async (req, res) => {
+  try {
+    // 1. Calculamos cuántos servicios vienen en los próximos 30 días
+    const proximosServiciosReq = await pool.query(`
+      SELECT COUNT(*) as cantidad
+      FROM servicio_preventivo sp
+      JOIN autobus a ON sp.id_autobus = a.id_autobus
+      WHERE sp.estado = 'Pendiente'
+      AND (
+        sp.fecha_proximo_servicio <= CURRENT_DATE + INTERVAL '30 days' 
+        OR a.kilometraje_ultima_carga >= (sp.km_proximo_servicio - 2000)
+      )
+    `);
+    const numServiciosProyectados = parseInt(proximosServiciosReq.rows[0].cantidad || 0);
+
+    // Si no hay servicios, devolvemos 0 y vacío
+    if (numServiciosProyectados === 0) {
+      return res.json({ servicios_proyectados: 0, gasto_estimado: 0, compras_sugeridas: [] });
+    }
+
+    // 2. Obtenemos el TOP de insumos más usados en mantenimientos (Ej. Aceites, Grasas)
+    // Asumimos que los vales de mantenimiento dicen 'Mantenimiento Preventivo'
+    const sugerenciasInsumosReq = await pool.query(`
+      WITH MantenimientosPasados AS (
+        SELECT COUNT(id_salida) as total_servicios 
+        FROM salida_almacen 
+        WHERE tipo_salida ILIKE '%Mantenimiento Preventivo%' 
+        AND fecha_operacion >= CURRENT_DATE - INTERVAL '90 days'
+      )
+      SELECT 
+        i.nombre AS articulo,
+        'Insumo' AS tipo,
+        i.stock_actual,
+        -- Promedio usado por servicio * cantidad de servicios futuros
+        CEIL((SUM(dsi.cantidad_usada) / NULLIF((SELECT total_servicios FROM MantenimientosPasados), 0)) * $1) as cantidad_requerida
+      FROM detalle_salida_insumo dsi
+      JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida
+      JOIN insumo i ON dsi.id_insumo = i.id_insumo
+      WHERE sa.tipo_salida ILIKE '%Mantenimiento Preventivo%' 
+      AND sa.fecha_operacion >= CURRENT_DATE - INTERVAL '90 days'
+      GROUP BY i.id_insumo, i.nombre, i.stock_actual
+    `, [numServiciosProyectados]);
+
+    // 3. Procesamos la lógica: ¿Necesitamos comprar?
+    let comprasSugeridas = [];
+
+    // Evaluamos los insumos
+    sugerenciasInsumosReq.rows.forEach(item => {
+      const requerido = parseInt(item.cantidad_requerida || 0);
+      const stock = parseInt(item.stock_actual || 0);
+      const aComprar = requerido - stock;
+
+      if (aComprar > 0) {
+        comprasSugeridas.push({
+          articulo: item.articulo,
+          tipo: item.tipo,
+          requerido: requerido,
+          stock: stock,
+          a_comprar: aComprar
+        });
+      }
+    });
+
+    // 4. (Opcional en backend) Puedes agregar otra consulta similar para 'refacciones' (Filtros) 
+    // y pushearlo al array 'comprasSugeridas'.
+
+    // 5. Calculamos un gasto estimado (Asumiendo un promedio de $2,500 por servicio, ajústalo a tu realidad)
+    const costoPromedioPorServicio = 2500;
+    const gastoEstimado = numServiciosProyectados * costoPromedioPorServicio;
+
+    res.json({
+      servicios_proyectados: numServiciosProyectados,
+      gasto_estimado: gastoEstimado,
+      compras_sugeridas: comprasSugeridas.sort((a, b) => b.a_comprar - a.a_comprar) // Los más urgentes arriba
+    });
+
+  } catch (error) {
+    console.error('Error en proyección:', error);
+    res.status(500).json({ message: 'Error al generar proyecciones' });
   }
 });
 module.exports = router;
