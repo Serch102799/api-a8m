@@ -1,3 +1,4 @@
+process.env.TZ = 'America/Mexico_City';
 const express = require('express');
 require('dotenv').config();
 const cors = require('cors');
@@ -12,7 +13,7 @@ const detallesEntradaRouter = require('./routes/detalleEntrada');
 const salidasAlmacenRouter = require('./routes/salidasAlmacen');
 const detalleSalidasRouter = require('./routes/detalleSalidas');
 const dashboardRouter = require('./routes/dashboard');
-const movimientosRouter = require('./routes/movimientos'); 
+const movimientosRouter = require('./routes/movimientos');
 const historialMantenimientoRouter = require('./routes/historialMantenimiento');
 const insumosRouter = require('./routes/insumos');
 const entradasInsumoRouter = require('./routes/entradasInsumo');
@@ -47,8 +48,8 @@ const app = express();
 app.set('trust proxy', true);
 
 const whiteList = [
-    'http://localhost:4200',        
-    'https://sge-10.vercel.app'     
+    'http://localhost:4200',
+    'https://sge-10.vercel.app'
 ];
 const corsOptions = {
     origin: function (origin, callback) {
@@ -95,7 +96,7 @@ app.use('/api/tanques', tanquesRoutes);
 app.use('/api/ubicaciones', ubicacionesRoutes);
 app.use('/api/traslados', trasladosRoutes);
 app.use('/api/produccion', produccionRouter);
-app.use('/api/productos-compuestos', productosCompuestosRouter); 
+app.use('/api/productos-compuestos', productosCompuestosRouter);
 app.use('/api/rendimientos', rendiminetosRouter);
 app.use('/api/ajuste-inventario', ajusteInventario);
 app.use('/api/conteo-inventario', conteoInventario);
@@ -110,13 +111,13 @@ app.use('/api/viajes-turismo', viajesTurismoRoutes);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpec);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
 });
 
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en el puerto ${PORT}`);
-  console.log(`Documentación Swagger en http://localhost:${PORT}/api-docs`);
+    console.log(`Servidor corriendo en el puerto ${PORT}`);
+    console.log(`Documentación Swagger en http://localhost:${PORT}/api-docs`);
 });

@@ -112,11 +112,15 @@ router.post('/', async (req, res) => {
 router.post('/:id/completar', async (req, res) => {
   const { id } = req.params;
 
-  // 🚀 EXTRAEMOS EL NUEVO PARÁMETRO "tipo_servicio"
-  const { id_autobus, km_realizado, fecha_realizado, observaciones, id_salida_almacen, tipo_servicio } = req.body;
+  // 🚀 EXTRAEMOS LA NUEVA BANDERA
+  const { id_autobus, km_realizado, fecha_realizado, observaciones, id_salida_almacen, tipo_servicio, cambio_odometro } = req.body;
 
-  // 🚀 SI FUE DE OPORTUNIDAD, LO INYECTAMOS EN LAS OBSERVACIONES
   let observacionesFinales = observaciones || '';
+
+  // 🚀 SI HUBO CAMBIO DE ODÓMETRO, DEJAMOS EL RASTRO CLARO
+  if (cambio_odometro) {
+    observacionesFinales = `[CAMBIO DE ODÓMETRO - Reinicio de KM] ${observacionesFinales}`;
+  }
   if (tipo_servicio === 'Mantenimiento de Oportunidad') {
     observacionesFinales = `[ADELANTADO] ${observacionesFinales}`;
   }
@@ -126,6 +130,16 @@ router.post('/:id/completar', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // 🚀 ACTUALIZACIÓN CRÍTICA: Forzamos el nuevo KM en la tabla del autobús
+    // Esto es vital para que otras partes del sistema (como cargas de diésel) no fallen
+    if (cambio_odometro) {
+      await client.query(`
+        UPDATE autobus 
+        SET kilometraje_ultima_carga = $1 
+        WHERE id_autobus = $2
+      `, [km_realizado, id_autobus]);
+    }
+
     // A) ACTUALIZAMOS EL SERVICIO ACTUAL A 'COMPLETADO'
     await client.query(`
       UPDATE servicio_preventivo 
@@ -134,19 +148,18 @@ router.post('/:id/completar', async (req, res) => {
       WHERE id_servicio = $5
     `, [fecha_realizado, km_realizado, observacionesFinales, id_salida_almacen || null, id]);
 
-    // B) AGENDAMOS EL SIGUIENTE SERVICIO AUTOMÁTICAMENTE
+    // B) AGENDAMOS EL SIGUIENTE SERVICIO AUTOMÁTICAMENTE (Calculado desde el nuevo KM)
     const nuevoServicioReq = await client.query(`
       INSERT INTO servicio_preventivo 
       (id_autobus, fecha_ultimo_servicio, km_ultimo_servicio, fecha_proximo_servicio, km_proximo_servicio)
       VALUES (
         $1, $2, $3, 
         $2::date + INTERVAL '6 months', 
-        $3 + 30000  -- ⚙️ AJUSTE DE KM: Sumamos 30,000 km al KM REAL en el que se acaba de hacer el servicio
+        $3 + 30000
       ) RETURNING id_servicio
     `, [id_autobus, fecha_realizado, km_realizado]);
 
     await client.query('COMMIT');
-
     // 🛡️ REGISTRO DE AUDITORÍA: COMPLETAR SERVICIO
     registrarAuditoria({
       id_usuario: req.user.id,
