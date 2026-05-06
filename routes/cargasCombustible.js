@@ -631,7 +631,7 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
             }
         }
 
-        // 🚀 3. MAGIA: CÁLCULO DE LITROS DESVIACIÓN (DIFERENCIA VS IDEAL)
+        // 3. MAGIA: CÁLCULO DE LITROS DESVIACIÓN (DIFERENCIA VS IDEAL)
         const rendResult = await client.query(
             `SELECT rendimiento_bueno FROM rendimientos_referencia 
              WHERE TRIM(UPPER(modelo_autobus)) = TRIM(UPPER($1)) AND id_ruta = $2 AND activo = TRUE LIMIT 1`,
@@ -645,15 +645,32 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
         const rendimiento_calculado = litros_cargados > 0 ? km_recorridos / litros_cargados : 0;
         const desviacion_km = km_recorridos - km_esperados;
 
-        // 4. Guardar Carga
+        // 4. Seleccionar el Tanque Principal (por defecto el Tanque 1 de la ubicación) y Validar Existencia
+        const tanqueResult = await client.query(
+            'SELECT id_tanque, nivel_actual_litros, nombre_tanque FROM tanques_combustible WHERE id_ubicacion = $1 ORDER BY id_tanque ASC LIMIT 1 FOR UPDATE',
+            [id_ubicacion]
+        );
+
+        if (tanqueResult.rows.length === 0) {
+            throw new Error('No se encontró ningún tanque para esta ubicación.');
+        }
+
+        const tanquePrincipal = tanqueResult.rows[0];
+
+        // Validar que el tanque no quede en negativo
+        if (parseFloat(tanquePrincipal.nivel_actual_litros) < parseFloat(litros_cargados)) {
+            throw new Error(`El ${tanquePrincipal.nombre_tanque} no tiene suficiente combustible. Nivel actual: ${tanquePrincipal.nivel_actual_litros} Lts, Solicitado: ${litros_cargados} Lts.`);
+        }
+
+        // 5. Guardar Carga
         const cargaResult = await client.query(
             `INSERT INTO cargas_combustible (
                 id_autobus, id_empleado_operador, id_empleado_despachador, id_tanque, fecha_operacion,
                 km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado,
                 km_esperados, desviacion_km, motivo_desviacion,
                 id_ruta_principal, dias_laborados, tipo_calculo, litros_desviacion
-            ) VALUES ($1, $2, $3, (SELECT id_tanque FROM tanques_combustible WHERE id_ubicacion = $4 LIMIT 1), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id_carga`,
-            [id_autobus, id_empleado_operador, id_empleado_despachador, id_ubicacion, fecha_operacion, km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado, km_esperados, desviacion_km, motivo_desviacion, id_ruta_principal, dias_laborados, tipo_calculo, litros_desviacion]
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id_carga`,
+            [id_autobus, id_empleado_operador, id_empleado_despachador, tanquePrincipal.id_tanque, fecha_operacion, km_inicial, km_final, km_recorridos, litros_cargados, rendimiento_calculado, km_esperados, desviacion_km, motivo_desviacion, id_ruta_principal, dias_laborados, tipo_calculo, litros_desviacion]
         );
 
         const id_carga = cargaResult.rows[0].id_carga;
@@ -665,7 +682,7 @@ router.post('/', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'SuperUs
         }
 
         await client.query('UPDATE autobus SET kilometraje_actual = $1, kilometraje_ultima_carga = $1 WHERE id_autobus = $2', [km_final, id_autobus]);
-        await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_ubicacion = $2', [litros_cargados, id_ubicacion]);
+        await client.query('UPDATE tanques_combustible SET nivel_actual_litros = nivel_actual_litros - $1 WHERE id_tanque = $2', [litros_cargados, tanquePrincipal.id_tanque]);
 
         await client.query('COMMIT');
         res.status(201).json({ message: 'Carga registrada con éxito.' });
