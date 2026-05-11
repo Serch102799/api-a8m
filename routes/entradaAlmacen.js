@@ -141,18 +141,20 @@ router.get('/detalles/:id', async (req, res) => {
   try {
     const detallesPromise = pool.query( `
       (SELECT 
+        de.id_detalle_entrada as id_detalle, r.id_refaccion as id_item,
         r.nombre AS nombre_item, (r.nombre || ' (' || COALESCE(r.numero_parte, 'S/N') || ')') AS descripcion,
         r.marca, de.cantidad_recibida AS cantidad, l.costo_unitario_final AS costo,
-        'Refacción' AS tipo_item
+        'refaccion' AS tipo_item
       FROM detalle_entrada de
       JOIN refaccion r ON de.id_refaccion = r.id_refaccion
       JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
       WHERE de.id_entrada = $1)
       UNION ALL
       (SELECT 
+        dei.id_detalle_insumo as id_detalle, i.id_insumo as id_item,
         i.nombre AS nombre_item, (i.nombre || ' - ' || COALESCE(i.marca, 'S/M')) AS descripcion,
         i.marca, dei.cantidad_recibida AS cantidad, dei.costo_unitario_final AS costo,
-        'Insumo' AS tipo_item
+        'insumo' AS tipo_item
       FROM detalle_entrada_insumo dei
       JOIN insumo i ON dei.id_insumo = i.id_insumo
       WHERE dei.id_entrada = $1)
@@ -398,7 +400,49 @@ router.put('/:id/editar-completo', verifyToken, checkRole(['SuperUsuario']), asy
                 }
             } 
             else if (item.tipo === 'insumo') {
-                // Lógica de insumos, igual a la tuya
+                const detalleActual = await client.query(
+                    `SELECT id_entrada, id_insumo, cantidad_recibida, costo_unitario_final 
+                     FROM detalle_entrada_insumo WHERE id_detalle_insumo = $1`,
+                    [item.id_detalle]
+                );
+                
+                if (detalleActual.rows.length > 0) {
+                    const detalle = detalleActual.rows[0];
+                    const diferenciaCantidad = item.cantidad_nueva - detalle.cantidad_recibida;
+                    const valorAnterior = detalle.cantidad_recibida * detalle.costo_unitario_final;
+                    const valorNuevo = item.cantidad_nueva * item.costo_nuevo;
+                    const diferenciaValor = valorNuevo - valorAnterior;
+
+                    const insumoRes = await client.query(
+                        `SELECT stock_actual, costo_unitario_promedio FROM insumo WHERE id_insumo = $1 FOR UPDATE`,
+                        [item.id_item]
+                    );
+                    const insumoActual = insumoRes.rows[0];
+                    
+                    if (insumoActual.stock_actual + diferenciaCantidad < 0) {
+                        throw new Error(`No puedes reducir la cantidad de ${item.nombre}. El stock quedaría negativo.`);
+                    }
+
+                    const valorTotalActual = insumoActual.stock_actual * insumoActual.costo_unitario_promedio;
+                    const nuevoStockTotal = insumoActual.stock_actual + diferenciaCantidad;
+                    let nuevoCostoPromedio = 0;
+                    if (nuevoStockTotal > 0) {
+                        nuevoCostoPromedio = (valorTotalActual + diferenciaValor) / nuevoStockTotal;
+                        if (nuevoCostoPromedio < 0) nuevoCostoPromedio = 0;
+                    }
+
+                    await client.query(
+                        `UPDATE insumo SET stock_actual = $1, costo_unitario_promedio = $2 WHERE id_insumo = $3`,
+                        [nuevoStockTotal, nuevoCostoPromedio, item.id_item]
+                    );
+
+                    await client.query(
+                        `UPDATE detalle_entrada_insumo 
+                         SET cantidad_recibida = $1, costo_unitario_subtotal = $2, costo_unitario_final = $2, monto_iva_unitario = 0 
+                         WHERE id_detalle_insumo = $3`,
+                        [item.cantidad_nueva, item.costo_nuevo, item.id_detalle]
+                    );
+                }
             }
         }
 
