@@ -161,7 +161,7 @@ router.get('/:tipoReporte', async (req, res) => {
       const fechaFinAjustadaAutobus = new Date(fechaFin);
       fechaFinAjustadaAutobus.setDate(fechaFinAjustadaAutobus.getDate() + 1);
       const fechaFinStrAutobus = fechaFinAjustadaAutobus.toISOString().split('T')[0];
-      
+
       query = `
         WITH Gastos AS (
           SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
@@ -183,6 +183,68 @@ router.get('/:tipoReporte', async (req, res) => {
         ORDER BY costo_total_mantenimiento DESC;
       `;
       params = [fechaInicio, fechaFinStrAutobus];
+      break;
+
+    // =======================================================
+    // COSTO POR AUTOBÚS ESPECÍFICO (FILTRADO POR IDs)
+    // =======================================================
+    case 'costo-por-autobus-especifico':
+      if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Se requiere un rango de fechas.' });
+
+      const { idsAutobuses } = req.query;
+      if (!idsAutobuses) return res.status(400).json({ message: 'Se requiere seleccionar al menos un autobús.' });
+
+      // Transformamos el string "1,5" en un arreglo real [1, 5]
+      let arrBuses = [];
+      if (typeof idsAutobuses === 'string') {
+        arrBuses = idsAutobuses.split(',').map(id => parseInt(id.trim(), 10));
+      } else if (Array.isArray(idsAutobuses)) {
+        arrBuses = idsAutobuses.map(id => parseInt(id, 10));
+      }
+
+      if (arrBuses.length === 0 || arrBuses.some(isNaN)) {
+        return res.status(400).json({ message: 'IDs de autobuses no válidos.' });
+      }
+
+      const fFinAutobusEsp = new Date(fechaFin);
+      fFinAutobusEsp.setDate(fFinAutobusEsp.getDate() + 1);
+      const fFinStrAutobusEsp = fFinAutobusEsp.toISOString().split('T')[0];
+
+      query = `
+        WITH Gastos AS (
+          SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
+          FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion 
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 
+          AND sa.id_autobus = ANY($3::int[])
+          
+          UNION ALL
+          
+          SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, i.nombre, i.marca, (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, dsi.costo_al_momento as costo_unitario, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
+          FROM detalle_salida_insumo dsi JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida JOIN insumo i ON dsi.id_insumo = i.id_insumo 
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0 
+          AND sa.id_autobus = ANY($3::int[])
+          
+          UNION ALL
+          
+          SELECT se.id_autobus, se.fecha_servicio as fecha, 'Serv. Externo' as tipo_item, se.descripcion as nombre, COALESCE(p.nombre_proveedor, 'Taller Externo') as marca, 1 as cantidad, se.costo_total as costo_unitario, se.costo_total as costo_total
+          FROM servicio_externo se LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor 
+          WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo' 
+          AND se.id_autobus = ANY($3::int[])
+          
+          UNION ALL
+          
+          SELECT pr.id_autobus_destino as id_autobus, pr.fecha_instalacion as fecha, 'Pieza Recuperada' as tipo_item, r.nombre, r.marca, 1 as cantidad, pr.costo_reparacion as costo_unitario, pr.costo_reparacion as costo_total
+          FROM pieza_recuperada pr JOIN refaccion r ON pr.id_refaccion = r.id_refaccion 
+          WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0 
+          AND pr.id_autobus_destino = ANY($3::int[])
+        )
+        SELECT a.id_autobus, a.economico as autobus, COALESCE(a.razon_social::varchar, 'Sin Razón Social') as razon_social, a.marca as marca_autobus, a.modelo as modelo_autobus, SUM(g.costo_total) as costo_total_mantenimiento,
+          json_agg(json_build_object('fecha', g.fecha, 'tipo_item', g.tipo_item, 'nombre', g.nombre, 'marca', g.marca, 'cantidad', g.cantidad, 'costo_unitario', g.costo_unitario, 'costo_total', g.costo_total) ORDER BY g.fecha DESC) as detalles
+        FROM Gastos g JOIN autobus a ON g.id_autobus = a.id_autobus 
+        GROUP BY a.id_autobus, a.economico, a.razon_social, a.marca, a.modelo 
+        ORDER BY costo_total_mantenimiento DESC;
+      `;
+      params = [fechaInicio, fFinStrAutobusEsp, arrBuses];
       break;
 
     case 'compras-razon-social':
@@ -340,11 +402,11 @@ router.get('/:tipoReporte', async (req, res) => {
         const listaResult = await pool.query(listaQuery, [fechaInicio, fFinStrGT]);
         const totalResult = await pool.query(totalQuery, [fechaInicio, fFinStrGT]);
 
-        return res.json({ 
-          entradas: listaResult.rows, 
-          totalGeneral: parseFloat(totalResult.rows[0].total_general || 0) 
+        return res.json({
+          entradas: listaResult.rows,
+          totalGeneral: parseFloat(totalResult.rows[0].total_general || 0)
         });
-        
+
       } catch (error) {
         console.error('Error al generar gastos totales:', error);
         return res.status(500).json({ message: 'Error al generar el reporte de gastos totales', error: error.message });
@@ -352,11 +414,11 @@ router.get('/:tipoReporte', async (req, res) => {
 
     case 'compras-proveedor':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
-      
-      const idProveedor = req.query.idProveedor || null; 
+
+      const idProveedor = req.query.idProveedor || null;
       const fFinCP = new Date(fechaFin); fFinCP.setDate(fFinCP.getDate() + 1);
       const fFinStrCP = fFinCP.toISOString().split('T')[0];
-      
+
       query = `
         WITH Compras AS (
           -- 1. Entradas de Almacen (Refacciones e Insumos)
@@ -442,7 +504,7 @@ router.get('/:tipoReporte', async (req, res) => {
     // =======================================================
     case 'detalle-gastos-salidas':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
-      
+
       const fFinDGS = new Date(fechaFin); fFinDGS.setDate(fFinDGS.getDate() + 1);
       const fFinStrDGS = fFinDGS.toISOString().split('T')[0];
 
@@ -518,7 +580,7 @@ router.get('/:tipoReporte', async (req, res) => {
       `;
       params = [fechaInicio, fFinStrDGS];
       break;
-      
+
     case 'dashboard-kpis':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
       const fFinDash = new Date(fechaFin); fFinDash.setDate(fFinDash.getDate() + 1);
@@ -643,6 +705,7 @@ router.get('/:tipoReporte', async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
+
 
 
 module.exports = router;
