@@ -175,6 +175,12 @@ router.get('/:tipoReporte', async (req, res) => {
           UNION ALL
           SELECT pr.id_autobus_destino as id_autobus, pr.fecha_instalacion as fecha, 'Pieza Recuperada' as tipo_item, r.nombre, r.marca, 1 as cantidad, pr.costo_reparacion as costo_unitario, pr.costo_reparacion as costo_total
           FROM pieza_recuperada pr JOIN refaccion r ON pr.id_refaccion = r.id_refaccion WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0
+          
+          -- 🚀 NUEVO: INSUMOS A GRANEL (PRORRATEO POR BUS)
+          UNION ALL
+          SELECT ucg.id_autobus, ucg.fecha_uso as fecha, 'Insumo a Granel' as tipo_item, i.nombre || ' (Prorrateo)' as nombre, 'N/A' as marca, 1 as cantidad, ucg.costo_prorrateado as costo_unitario, ucg.costo_prorrateado as costo_total
+          FROM uso_consumible_granel ucg JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel JOIN insumo i ON cg.id_insumo = i.id_insumo
+          WHERE ucg.fecha_uso >= $1 AND ucg.fecha_uso < $2 AND ucg.id_autobus IS NOT NULL AND ucg.costo_prorrateado > 0
         )
         SELECT a.id_autobus, a.economico as autobus, COALESCE(a.razon_social::varchar, 'Sin Razón Social') as razon_social, a.marca as marca_autobus, a.modelo as modelo_autobus, SUM(g.costo_total) as costo_total_mantenimiento,
           json_agg(json_build_object('fecha', g.fecha, 'tipo_item', g.tipo_item, 'nombre', g.nombre, 'marca', g.marca, 'cantidad', g.cantidad, 'costo_unitario', g.costo_unitario, 'costo_total', g.costo_total) ORDER BY g.fecha DESC) as detalles
@@ -194,7 +200,6 @@ router.get('/:tipoReporte', async (req, res) => {
       const { idsAutobuses } = req.query;
       if (!idsAutobuses) return res.status(400).json({ message: 'Se requiere seleccionar al menos un autobús.' });
 
-      // Transformamos el string "1,5" en un arreglo real [1, 5]
       let arrBuses = [];
       if (typeof idsAutobuses === 'string') {
         arrBuses = idsAutobuses.split(',').map(id => parseInt(id.trim(), 10));
@@ -237,6 +242,13 @@ router.get('/:tipoReporte', async (req, res) => {
           FROM pieza_recuperada pr JOIN refaccion r ON pr.id_refaccion = r.id_refaccion 
           WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0 
           AND pr.id_autobus_destino = ANY($3::int[])
+
+          -- 🚀 NUEVO: INSUMOS A GRANEL (PRORRATEO POR BUS ESPECÍFICO)
+          UNION ALL
+          SELECT ucg.id_autobus, ucg.fecha_uso as fecha, 'Insumo a Granel' as tipo_item, i.nombre || ' (Prorrateo)' as nombre, 'N/A' as marca, 1 as cantidad, ucg.costo_prorrateado as costo_unitario, ucg.costo_prorrateado as costo_total
+          FROM uso_consumible_granel ucg JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel JOIN insumo i ON cg.id_insumo = i.id_insumo
+          WHERE ucg.fecha_uso >= $1 AND ucg.fecha_uso < $2 AND ucg.costo_prorrateado > 0
+          AND ucg.id_autobus = ANY($3::int[])
         )
         SELECT a.id_autobus, a.economico as autobus, COALESCE(a.razon_social::varchar, 'Sin Razón Social') as razon_social, a.marca as marca_autobus, a.modelo as modelo_autobus, SUM(g.costo_total) as costo_total_mantenimiento,
           json_agg(json_build_object('fecha', g.fecha, 'tipo_item', g.tipo_item, 'nombre', g.nombre, 'marca', g.marca, 'cantidad', g.cantidad, 'costo_unitario', g.costo_unitario, 'costo_total', g.costo_total) ORDER BY g.fecha DESC) as detalles
@@ -297,6 +309,12 @@ router.get('/:tipoReporte', async (req, res) => {
           UNION ALL
           SELECT pr.id_autobus_destino as id_autobus, NULL as id_vehiculo_particular, pr.fecha_instalacion as fecha, 'Pieza Recuperada' as tipo, r.nombre as descripcion, pr.costo_reparacion as costo_total
           FROM pieza_recuperada pr JOIN refaccion r ON pr.id_refaccion = r.id_refaccion WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0
+          
+          -- 🚀 NUEVO: INSUMOS A GRANEL (RAZON SOCIAL)
+          UNION ALL
+          SELECT ucg.id_autobus, ucg.id_vehiculo_particular, ucg.fecha_uso as fecha, 'Insumo a Granel' as tipo, i.nombre || ' (Prorrateo)' as descripcion, ucg.costo_prorrateado as costo_total
+          FROM uso_consumible_granel ucg JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel JOIN insumo i ON cg.id_insumo = i.id_insumo
+          WHERE ucg.fecha_uso >= $1 AND ucg.fecha_uso < $2 AND ucg.costo_prorrateado > 0
         )
         SELECT 
           CASE WHEN g.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as razon_social, 
@@ -350,9 +368,6 @@ router.get('/:tipoReporte', async (req, res) => {
       params = [fechaInicio, fFinStrEsp, arrRefacciones, arrInsumos];
       break;
 
-    // =======================================================
-    // GASTOS TOTALES (EL FIX PRINCIPAL - UNION DE SERVICIOS EXTERNOS)
-    // =======================================================
     case 'gastos-totales':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
       const fFinGT = new Date(fechaFin); fFinGT.setDate(fFinGT.getDate() + 1);
@@ -378,7 +393,6 @@ router.get('/:tipoReporte', async (req, res) => {
             SELECT (pr.id_pieza_recuperada + 9000000) as id_entrada, pr.fecha_retorno as fecha_operacion, pr.factura_reparacion as factura_proveedor, 'Reparación Externa'::varchar as vale_interno, p.nombre_proveedor, 'Taller / Mecánico'::varchar as recibido_por, 'N/A'::varchar as razon_social, pr.costo_reparacion as valor_entrada, json_build_array(json_build_object('fecha', pr.fecha_retorno, 'tipo_item', 'Reparación de Casco', 'nombre', r.nombre, 'marca', r.marca, 'cantidad', 1, 'costo_unitario', pr.costo_reparacion, 'costo_total', pr.costo_reparacion))::json as detalles 
             FROM pieza_recuperada pr JOIN refaccion r ON pr.id_refaccion = r.id_refaccion LEFT JOIN proveedor p ON pr.id_proveedor_reparacion = p.id_proveedor WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
             
-            -- ¡AQUÍ ESTÁ LA INTEGRACIÓN DE SERVICIOS EXTERNOS!
             UNION ALL
             SELECT (se.id_servicio + 8000000) as id_entrada, se.fecha_servicio as fecha_operacion, 'N/A'::varchar as factura_proveedor, 'Servicio Externo'::varchar as vale_interno, COALESCE(p.nombre_proveedor, 'Taller Externo') as nombre_proveedor, 'Mantenimiento Externo'::varchar as recibido_por, COALESCE(a.razon_social::varchar, 'Sin Razón Social') as razon_social, se.costo_total as valor_entrada, json_build_array(json_build_object('fecha', se.fecha_servicio, 'tipo_item', 'Servicio Externo', 'nombre', se.descripcion, 'marca', 'N/A', 'cantidad', 1, 'costo_unitario', se.costo_total, 'costo_total', se.costo_total))::json as detalles
             FROM servicio_externo se LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor LEFT JOIN autobus a ON se.id_autobus = a.id_autobus WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
@@ -421,7 +435,6 @@ router.get('/:tipoReporte', async (req, res) => {
 
       query = `
         WITH Compras AS (
-          -- 1. Entradas de Almacen (Refacciones e Insumos)
           SELECT 
             ea.id_proveedor, 
             COALESCE(p.nombre_proveedor, 'Sin Proveedor (Compras Internas)') as proveedor, 
@@ -440,7 +453,6 @@ router.get('/:tipoReporte', async (req, res) => {
             ) t GROUP BY id_entrada
           ) sub ON ea.id_entrada = sub.id_entrada
           LEFT JOIN (
-             -- 🛠️ AQUI CONCATENAMOS TODOS LOS ARTICULOS DE LA COMPRA
              SELECT id_entrada, string_agg(nombre_item, ', ') as lista_articulos
              FROM (
                 SELECT de.id_entrada, r.nombre as nombre_item FROM detalle_entrada de JOIN refaccion r ON de.id_refaccion = r.id_refaccion
@@ -452,7 +464,6 @@ router.get('/:tipoReporte', async (req, res) => {
           
           UNION ALL
           
-          -- 2. Servicios Externos (Talleres)
           SELECT 
             se.id_proveedor, 
             COALESCE(p.nombre_proveedor, 'Taller Externo No Registrado') as proveedor, 
@@ -460,14 +471,13 @@ router.get('/:tipoReporte', async (req, res) => {
             'Servicio Externo' as tipo_compra, 
             COALESCE(se.factura_nota, 'S/D') as documento, 
             se.costo_total as costo_total,
-            se.descripcion as articulos -- 🛠️ Usamos la descripción del trabajo
+            se.descripcion as articulos 
           FROM servicio_externo se
           LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
           WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
           
           UNION ALL
           
-          -- 3. Reparaciones de Piezas (Cascos/Yonque)
           SELECT 
             pr.id_proveedor_reparacion as id_proveedor, 
             COALESCE(p.nombre_proveedor, 'Reparador No Registrado') as proveedor, 
@@ -475,7 +485,7 @@ router.get('/:tipoReporte', async (req, res) => {
             'Reparación de Casco' as tipo_compra, 
             COALESCE(pr.factura_reparacion, 'S/D') as documento, 
             pr.costo_reparacion as costo_total,
-            (SELECT nombre FROM refaccion WHERE id_refaccion = pr.id_refaccion) as articulos -- 🛠️ Traemos el nombre de la pieza
+            (SELECT nombre FROM refaccion WHERE id_refaccion = pr.id_refaccion) as articulos 
           FROM pieza_recuperada pr
           LEFT JOIN proveedor p ON pr.id_proveedor_reparacion = p.id_proveedor
           WHERE pr.fecha_retorno >= $1 AND pr.fecha_retorno < $2 AND pr.estado IN ('Disponible', 'Instalada') AND pr.costo_reparacion > 0
@@ -489,7 +499,7 @@ router.get('/:tipoReporte', async (req, res) => {
             'tipo_compra', tipo_compra, 
             'documento', documento, 
             'costo_total', costo_total,
-            'articulos', articulos -- 📦 AÑADIDO AL JSON
+            'articulos', articulos
           ) ORDER BY fecha DESC) as detalles
         FROM Compras
         WHERE ($3::int IS NULL OR id_proveedor = $3::int)
@@ -510,7 +520,6 @@ router.get('/:tipoReporte', async (req, res) => {
 
       query = `
         WITH DetalleSalidas AS (
-          -- 1. SALIDAS A AUTOBUSES Y FLOTA ADMIN (REFACCIONES)
           SELECT sa.fecha_operacion as fecha, 
                  'Refacción' as tipo_movimiento, 
                  r.nombre as articulo, 
@@ -528,7 +537,6 @@ router.get('/:tipoReporte', async (req, res) => {
 
           UNION ALL
 
-          -- 2. SALIDAS A AUTOBUSES Y FLOTA ADMIN (INSUMOS)
           SELECT sa.fecha_operacion as fecha, 
                  'Insumo' as tipo_movimiento, 
                  i.nombre as articulo, 
@@ -545,7 +553,6 @@ router.get('/:tipoReporte', async (req, res) => {
 
           UNION ALL
 
-          -- 3. SERVICIOS EXTERNOS (TALLERES)
           SELECT se.fecha_servicio as fecha, 
                  'Servicio Externo' as tipo_movimiento, 
                  se.descripcion as articulo,
@@ -559,7 +566,6 @@ router.get('/:tipoReporte', async (req, res) => {
 
           UNION ALL
 
-          -- 4. PRÉSTAMOS DE HERRAMIENTAS Y REFACCIONES
           SELECT p.fecha_prestamo as fecha, 
                  'Préstamo' as tipo_movimiento, 
                  CASE WHEN dp.tipo_item = 'insumo' THEN (SELECT nombre FROM insumo WHERE id_insumo = dp.id_item)
@@ -575,12 +581,29 @@ router.get('/:tipoReporte', async (req, res) => {
           JOIN detalle_prestamo dp ON p.id_prestamo = dp.id_prestamo
           LEFT JOIN empleado e ON p.id_empleado_solicitante = e.id_empleado
           WHERE p.fecha_prestamo >= $1 AND p.fecha_prestamo < $2
+
+          -- 🚀 NUEVO: INSUMOS A GRANEL EN SALIDAS
+          UNION ALL
+          SELECT ucg.fecha_uso as fecha, 
+                 'Insumo a Granel' as tipo_movimiento, 
+                 i.nombre || ' (Prorrateo)' as articulo, 
+                 CASE WHEN ucg.id_vehiculo_particular IS NOT NULL THEN 'Flota Administrativa' ELSE COALESCE(a.razon_social::varchar, 'Sin Razón Social') END as categoria_grafica,
+                 CASE WHEN ucg.id_vehiculo_particular IS NOT NULL THEN 'Auto: ' || vp.propietario ELSE 'Bus: ' || a.economico END as responsable_destino,
+                 1 as cantidad,
+                 ucg.costo_prorrateado as costo_total
+          FROM uso_consumible_granel ucg
+          JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel
+          JOIN insumo i ON cg.id_insumo = i.id_insumo
+          LEFT JOIN autobus a ON ucg.id_autobus = a.id_autobus
+          LEFT JOIN vehiculos_particulares vp ON ucg.id_vehiculo_particular = vp.id_vehiculo
+          WHERE ucg.fecha_uso >= $1 AND ucg.fecha_uso < $2 AND ucg.costo_prorrateado > 0
+
         )
         SELECT * FROM DetalleSalidas ORDER BY fecha DESC;
       `;
       params = [fechaInicio, fFinStrDGS];
       break;
-
+      
     case 'dashboard-kpis':
       if (!fechaInicio || !fechaFin) return res.status(400).json({ message: 'Rango de fechas requerido.' });
       const fFinDash = new Date(fechaFin); fFinDash.setDate(fFinDash.getDate() + 1);
@@ -614,7 +637,6 @@ router.get('/:tipoReporte', async (req, res) => {
             LEFT JOIN autobus a ON se.id_autobus = a.id_autobus
             WHERE se.fecha_servicio >= $1 AND se.fecha_servicio < $2 AND se.estatus = 'Activo'
 
-            -- 🚀 NUEVO: DEVOLUCIÓN DE PRÉSTAMOS (INGRESOS A ALMACÉN)
             UNION ALL
             SELECT 'Devolución de Préstamos'::varchar as razon_social, 
                    (dp.cantidad_devuelta * COALESCE(
@@ -648,6 +670,11 @@ router.get('/:tipoReporte', async (req, res) => {
             UNION ALL
             SELECT pr.id_autobus_destino as id_autobus, NULL as id_vehiculo_particular, pr.costo_reparacion as costo_total
             FROM pieza_recuperada pr WHERE pr.fecha_instalacion >= $1 AND pr.fecha_instalacion < $2 AND pr.estado = 'Instalada' AND pr.costo_reparacion > 0
+            
+            -- 🚀 NUEVO: GASTO PRORRATEADO A GRANEL AL DASHBOARD
+            UNION ALL
+            SELECT ucg.id_autobus, ucg.id_vehiculo_particular, ucg.costo_prorrateado as costo_total
+            FROM uso_consumible_granel ucg WHERE ucg.fecha_uso >= $1 AND ucg.fecha_uso < $2 AND ucg.costo_prorrateado > 0
           ),
           AgrupadoNormal AS (
             SELECT 
@@ -658,8 +685,6 @@ router.get('/:tipoReporte', async (req, res) => {
           ),
           SalidasTotales AS (
             SELECT razon_social, total FROM AgrupadoNormal
-            
-            -- 🚀 NUEVO: MATERIAL ENTREGADO EN PRÉSTAMO (SALIDA DE ALMACÉN)
             UNION ALL
             SELECT 'Préstamos'::varchar as razon_social, 
                    SUM(dp.cantidad_prestada * COALESCE(
@@ -705,7 +730,5 @@ router.get('/:tipoReporte', async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
-
-
 
 module.exports = router;

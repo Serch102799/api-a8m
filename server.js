@@ -43,6 +43,7 @@ const recuperadosRouter = require('./routes/recuperados');
 const serviciosRouter = require('./routes/servicios');
 const vehiculosParticularesRoutes = require('./routes/vehiculosParticulares');
 const viajesTurismoRoutes = require('./routes/viajesTurismo');
+const granelRouter = require('./routes/granel');
 
 const app = express();
 app.set('trust proxy', true);
@@ -108,6 +109,7 @@ app.use('/api/recuperados', recuperadosRouter);
 app.use('/api/servicios', serviciosRouter);
 app.use('/api/vehiculos-particulares', vehiculosParticularesRoutes);
 app.use('/api/viajes-turismo', viajesTurismoRoutes);
+app.use('/api/granel', granelRouter);
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/swagger.json', (req, res) => {

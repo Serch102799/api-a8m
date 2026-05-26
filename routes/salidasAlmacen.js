@@ -18,7 +18,8 @@ router.post('/', verifyToken, async (req, res) => {
     Solicitado_Por_ID,
     Observaciones,
     Kilometraje_Autobus,
-    Fecha_Operacion
+    Fecha_Operacion,
+    consumibles_granel_usados // 🚀 NUEVA VARIABLE RECIBIDA DESDE ANGULAR
   } = req.body;
 
   try {
@@ -42,6 +43,22 @@ router.post('/', verifyToken, async (req, res) => {
     const result = await pool.query(query, values);
     const idSalidaGenerado = result.rows[0].id_salida;
 
+    // 🚀 NUEVO: REGISTRAMOS LOS USOS A GRANEL (LOS CHECKBOXES)
+    if (consumibles_granel_usados && consumibles_granel_usados.length > 0) {
+      for (const idGranel of consumibles_granel_usados) {
+        await pool.query(`
+          INSERT INTO uso_consumible_granel 
+          (id_consumible_granel, id_autobus, id_vehiculo_particular, id_salida_almacen)
+          VALUES ($1, $2, $3, $4)
+        `, [
+          idGranel, 
+          ID_Autobus || null, 
+          ID_Vehiculo_Particular || null, 
+          idSalidaGenerado
+        ]);
+      }
+    }
+
     // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE VALE MAESTRO DE SALIDA
     registrarAuditoria({
       id_usuario: req.user.id, // Viene del verifyToken
@@ -55,7 +72,8 @@ router.post('/', verifyToken, async (req, res) => {
         id_vehiculo_particular: ID_Vehiculo_Particular || null,
         solicitado_por: Solicitado_Por_ID,
         kilometraje: Kilometraje_Autobus || null,
-        observaciones: Observaciones
+        observaciones: Observaciones,
+        insumos_granel_marcados: consumibles_granel_usados ? consumibles_granel_usados.length : 0 // Dejamos rastro en auditoría
       },
       ip_address: req.ip
     });
@@ -76,6 +94,8 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
   try {
     const query = `
       SELECT id_detalle, id_item, id_lote, nombre_item, numero_parte, cantidad, tipo_item, costo_unitario, cantidad_devuelta FROM (
+        
+        -- 1. REFACCIONES
         SELECT 
           ds.id_detalle_salida as id_detalle, 
           r.id_refaccion as id_item,
@@ -93,6 +113,7 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
 
         UNION ALL
 
+        -- 2. INSUMOS DIRECTOS
         SELECT 
           dsi.id_detalle_salida_insumo as id_detalle, 
           i.id_insumo as id_item,
@@ -106,6 +127,25 @@ router.get('/detalles/:idSalida', verifyToken, async (req, res) => {
         FROM detalle_salida_insumo dsi
         JOIN insumo i ON dsi.id_insumo = i.id_insumo
         WHERE dsi.id_salida = $1
+
+        UNION ALL
+
+        -- 🚀 3. NUEVO: INSUMOS A GRANEL (EL CHECKBOX)
+        SELECT 
+          ucg.id_uso as id_detalle, 
+          cg.id_insumo as id_item,
+          NULL as id_lote,
+          i.nombre || ' (A Granel)' as nombre_item, 
+          'PRORRATEO' as numero_parte,
+          1 as cantidad, 
+          'granel' as tipo_item,
+          ucg.costo_prorrateado as costo_unitario, 
+          0 as cantidad_devuelta
+        FROM uso_consumible_granel ucg
+        JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel
+        JOIN insumo i ON cg.id_insumo = i.id_insumo
+        WHERE ucg.id_salida_almacen = $1
+
       ) as detalles;
     `;
     const result = await pool.query(query, [idSalida]);

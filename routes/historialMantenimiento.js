@@ -128,10 +128,10 @@ router.get('/:idAutobus', async (req, res) => {
 
           UNION ALL
 
-          -- 4. NUEVO: PIEZAS RECUPERADAS (CASCOS)
+          -- 4. PIEZAS RECUPERADAS (CASCOS)
           SELECT
             pr.fecha_instalacion as fecha,
-            0 as kilometraje, -- Las piezas recuperadas aún no guardan kilometraje en su tabla actual
+            0 as kilometraje,
             'Pieza Recuperada' as tipo_item,
             r.nombre,
             r.marca,
@@ -142,6 +142,26 @@ router.get('/:idAutobus', async (req, res) => {
           FROM pieza_recuperada pr
           JOIN refaccion r ON pr.id_refaccion = r.id_refaccion
           WHERE pr.id_autobus_destino = $1 AND pr.estado = 'Instalada'
+
+          UNION ALL
+
+          -- 🚀 5. NUEVO: INSUMOS A GRANEL (PRORRATEO)
+          SELECT
+            COALESCE(sa.fecha_operacion, ucg.fecha_uso) as fecha,
+            COALESCE(sa.kilometraje_autobus, 0) as kilometraje,
+            'Insumo a Granel' as tipo_item,
+            i.nombre || ' (Prorrateo)' as nombre,
+            'N/A' as marca,
+            1 as cantidad,
+            COALESCE(e.nombre, 'Asignación Automática') as solicitado_por,
+            COALESCE(ucg.costo_prorrateado, 0) as costo_unitario,
+            COALESCE(ucg.costo_prorrateado, 0) as costo_total
+          FROM uso_consumible_granel ucg
+          JOIN consumible_granel cg ON ucg.id_consumible_granel = cg.id_consumible_granel
+          JOIN insumo i ON cg.id_insumo = i.id_insumo
+          LEFT JOIN salida_almacen sa ON ucg.id_salida_almacen = sa.id_salida
+          LEFT JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
+          WHERE ucg.id_autobus = $1
 
        ) as movimientos
        ORDER BY fecha DESC`,
@@ -177,11 +197,19 @@ router.get('/:idAutobus', async (req, res) => {
 
           UNION ALL
 
-          -- NUEVO: Costos de PIEZAS RECUPERADAS (CASCOS)
+          -- Costos de PIEZAS RECUPERADAS (CASCOS)
           SELECT 
             SUM(costo_reparacion) as costo_total
           FROM pieza_recuperada
           WHERE id_autobus_destino = $1 AND estado = 'Instalada'
+
+          UNION ALL
+
+          -- 🚀 NUEVO: Costos de INSUMOS A GRANEL (PRORRATEO)
+          SELECT 
+            SUM(costo_prorrateado) as costo_total
+          FROM uso_consumible_granel
+          WHERE id_autobus = $1
 
       ) as costos`,
       [idAutobus]
@@ -191,11 +219,11 @@ router.get('/:idAutobus', async (req, res) => {
       historialPromise,
       costoTotalPromise,
     ]);
-    
+
     const historialFormateado = historialResult.rows.map(item => ({
-        ...item,
-        costo_unitario: parseFloat(item.costo_unitario || 0),
-        costo_total: parseFloat(item.costo_total || 0)
+      ...item,
+      costo_unitario: parseFloat(item.costo_unitario || 0),
+      costo_total: parseFloat(item.costo_total || 0)
     }));
 
     res.json({
