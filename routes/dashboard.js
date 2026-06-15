@@ -126,7 +126,8 @@ router.get('/stats', verifyToken, async (req, res) => {
       (SELECT ea.fecha_operacion, r.nombre AS nombre_item, de.cantidad_recibida, 'Refacción' as tipo_item
        FROM detalle_entrada de
        JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada
-       JOIN refaccion r ON de.id_refaccion = r.id_refaccion)
+       JOIN refaccion r ON de.id_refaccion = r.id_refaccion
+       WHERE de.estado IS DISTINCT FROM 'Cancelado')
       UNION ALL
       (SELECT ea.fecha_operacion, i.nombre AS nombre_item, dei.cantidad_recibida, 'Insumo' as tipo_item
        FROM detalle_entrada_insumo dei
@@ -140,7 +141,8 @@ router.get('/stats', verifyToken, async (req, res) => {
        FROM detalle_salida ds
        JOIN salida_almacen s ON ds.id_salida = s.id_salida
        JOIN lote_refaccion l ON ds.id_lote = l.id_lote
-       JOIN refaccion r ON l.id_refaccion = r.id_refaccion)
+       JOIN refaccion r ON l.id_refaccion = r.id_refaccion
+       WHERE ds.estado IS DISTINCT FROM 'Cancelado')
       UNION ALL
       (SELECT s.fecha_operacion, i.nombre AS nombre_item, dsi.cantidad_usada AS cantidad, 'Insumo' as tipo_item
        FROM detalle_salida_insumo dsi
@@ -205,17 +207,18 @@ router.get('/top-autobuses', async (req, res) => {
       FROM autobus a
       JOIN (
           -- 1. Suma de Gastos en REFACCIONES en el periodo indicado
-          SELECT sa.id_autobus, SUM(ds.cantidad_despachada * l.costo_unitario_final) as costo_total
+          SELECT sa.id_autobus, SUM((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
           FROM detalle_salida ds
           JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
           WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion <= $2
+          AND ds.estado IS DISTINCT FROM 'Cancelado'
           GROUP BY sa.id_autobus
           
           UNION ALL
           
           -- 2. Suma de Gastos en INSUMOS en el periodo indicado
-          SELECT sa.id_autobus, SUM(dsi.cantidad_usada * i.costo_unitario_promedio) as costo_total
+          SELECT sa.id_autobus, SUM((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * i.costo_unitario_promedio) as costo_total
           FROM detalle_salida_insumo dsi
           JOIN insumo i ON dsi.id_insumo = i.id_insumo
           JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida

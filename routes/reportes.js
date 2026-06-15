@@ -165,7 +165,7 @@ router.get('/:tipoReporte', async (req, res) => {
       query = `
         WITH Gastos AS (
           SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
-          FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+          FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado'
           UNION ALL
           SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Insumo' as tipo_item, i.nombre, i.marca, (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, dsi.costo_al_momento as costo_unitario, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
           FROM detalle_salida_insumo dsi JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida JOIN insumo i ON dsi.id_insumo = i.id_insumo WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0
@@ -219,7 +219,7 @@ router.get('/:tipoReporte', async (req, res) => {
         WITH Gastos AS (
           SELECT sa.id_autobus, sa.fecha_operacion as fecha, 'Refacción' as tipo_item, r.nombre, r.marca, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
           FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion 
-          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado' 
           AND sa.id_autobus = ANY($3::int[])
           
           UNION ALL
@@ -271,7 +271,7 @@ router.get('/:tipoReporte', async (req, res) => {
           LEFT JOIN (
             SELECT id_entrada, SUM(cantidad_recibida * costo_unitario_final) as total_entrada
             FROM (
-              SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+              SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada WHERE de.estado IS DISTINCT FROM 'Cancelado'
               UNION ALL SELECT dei.id_entrada, dei.cantidad_recibida, dei.costo_unitario_final FROM detalle_entrada_insumo dei
             ) t GROUP BY id_entrada
           ) sub ON ea.id_entrada = sub.id_entrada
@@ -298,7 +298,7 @@ router.get('/:tipoReporte', async (req, res) => {
         WITH Gastos AS (
           SELECT sa.id_autobus, sa.id_vehiculo_particular, sa.fecha_operacion as fecha, 'Refacción' as tipo, r.nombre as descripcion, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
           FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
-          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado'
           UNION ALL
           SELECT sa.id_autobus, sa.id_vehiculo_particular, sa.fecha_operacion as fecha, 'Insumo' as tipo, i.nombre as descripcion, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
           FROM detalle_salida_insumo dsi JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida JOIN insumo i ON dsi.id_insumo = i.id_insumo
@@ -339,7 +339,7 @@ router.get('/:tipoReporte', async (req, res) => {
         ),
         Salidas AS (
           SELECT ds.id_refaccion, SUM(ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as total_salidas, json_agg(json_build_object('tipo_movimiento', 'Salida', 'fecha', sa.fecha_operacion, 'documento', COALESCE('Bus ' || a.economico, 'Flota Admin'), 'cantidad', (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)), 'costo_unitario', l.costo_unitario_final, 'costo_total', ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final)) ORDER BY sa.fecha_operacion DESC) as detalle_salidas
-          FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 GROUP BY ds.id_refaccion
+          FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado' GROUP BY ds.id_refaccion
         )
         SELECT r.id_refaccion, r.nombre as articulo, r.marca, r.numero_parte, COALESCE(e.total_entradas, 0) as entradas_periodo, COALESCE(s.total_salidas, 0) as salidas_periodo, (COALESCE(e.detalle_entradas::jsonb, '[]'::jsonb) || COALESCE(s.detalle_salidas::jsonb, '[]'::jsonb)) as detalles
         FROM refaccion r LEFT JOIN Entradas e ON r.id_refaccion = e.id_refaccion LEFT JOIN Salidas s ON r.id_refaccion = s.id_refaccion WHERE e.total_entradas IS NOT NULL OR s.total_salidas IS NOT NULL ORDER BY r.nombre ASC;
@@ -358,7 +358,7 @@ router.get('/:tipoReporte', async (req, res) => {
       query = `
         WITH Movimientos AS (
           SELECT de.id_refaccion as id_item, 'Refacción' as tipo_articulo, r.nombre, r.marca, 'Entrada' as tipo_movimiento, ea.fecha_operacion as fecha, COALESCE(ea.factura_proveedor, ea.vale_interno, 'N/A') as documento, de.cantidad_recibida as cantidad, l.costo_unitario_final as costo_unitario, (de.cantidad_recibida * l.costo_unitario_final) as costo_total FROM detalle_entrada de JOIN entrada_almacen ea ON de.id_entrada = ea.id_entrada JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada JOIN refaccion r ON de.id_refaccion = r.id_refaccion WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 AND de.id_refaccion = ANY($3::int[])
-          UNION ALL SELECT ds.id_refaccion as id_item, 'Refacción' as tipo_articulo, r.nombre, r.marca, 'Salida' as tipo_movimiento, sa.fecha_operacion as fecha, COALESCE('Bus ' || a.economico, 'Flota Admin') as documento, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.id_refaccion = ANY($3::int[])
+          UNION ALL SELECT ds.id_refaccion as id_item, 'Refacción' as tipo_articulo, r.nombre, r.marca, 'Salida' as tipo_movimiento, sa.fecha_operacion as fecha, COALESCE('Bus ' || a.economico, 'Flota Admin') as documento, (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) as cantidad, l.costo_unitario_final as costo_unitario, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote JOIN refaccion r ON ds.id_refaccion = r.id_refaccion LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado' AND ds.id_refaccion = ANY($3::int[])
           UNION ALL SELECT dei.id_insumo as id_item, 'Insumo' as tipo_articulo, i.nombre, i.marca, 'Entrada' as tipo_movimiento, ea.fecha_operacion as fecha, COALESCE(ea.factura_proveedor, ea.vale_interno, 'N/A') as documento, dei.cantidad_recibida as cantidad, dei.costo_unitario_final as costo_unitario, (dei.cantidad_recibida * dei.costo_unitario_final) as costo_total FROM detalle_entrada_insumo dei JOIN entrada_almacen ea ON dei.id_entrada = ea.id_entrada JOIN insumo i ON dei.id_insumo = i.id_insumo WHERE ea.fecha_operacion >= $1 AND ea.fecha_operacion < $2 AND dei.id_insumo = ANY($4::int[])
           UNION ALL SELECT dsi.id_insumo as id_item, 'Insumo' as tipo_articulo, i.nombre, i.marca, 'Salida' as tipo_movimiento, sa.fecha_operacion as fecha, COALESCE('Bus ' || a.economico, 'Flota Admin') as documento, (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) as cantidad, dsi.costo_al_momento as costo_unitario, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total FROM detalle_salida_insumo dsi JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida JOIN insumo i ON dsi.id_insumo = i.id_insumo LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0 AND dsi.id_insumo = ANY($4::int[])
         )
@@ -448,7 +448,7 @@ router.get('/:tipoReporte', async (req, res) => {
           LEFT JOIN (
             SELECT id_entrada, SUM(cantidad_recibida * costo_unitario_final) as total_entrada
             FROM (
-              SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+              SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada WHERE de.estado IS DISTINCT FROM 'Cancelado'
               UNION ALL SELECT dei.id_entrada, dei.cantidad_recibida, dei.costo_unitario_final FROM detalle_entrada_insumo dei
             ) t GROUP BY id_entrada
           ) sub ON ea.id_entrada = sub.id_entrada
@@ -533,7 +533,7 @@ router.get('/:tipoReporte', async (req, res) => {
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
           LEFT JOIN autobus a ON sa.id_autobus = a.id_autobus
           LEFT JOIN vehiculos_particulares vp ON sa.id_vehiculo_particular = vp.id_vehiculo
-          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+          WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado'
 
           UNION ALL
 
@@ -620,7 +620,7 @@ router.get('/:tipoReporte', async (req, res) => {
             LEFT JOIN (
               SELECT id_entrada, SUM(cantidad_recibida * costo_unitario_final) as total_entrada
               FROM (
-                SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada
+                SELECT de.id_entrada, de.cantidad_recibida, l.costo_unitario_final FROM detalle_entrada de JOIN lote_refaccion l ON de.id_detalle_entrada = l.id_detalle_entrada WHERE de.estado IS DISTINCT FROM 'Cancelado'
                 UNION ALL SELECT dei.id_entrada, dei.cantidad_recibida, dei.costo_unitario_final FROM detalle_entrada_insumo dei
               ) t GROUP BY id_entrada
             ) sub ON ea.id_entrada = sub.id_entrada
@@ -660,7 +660,7 @@ router.get('/:tipoReporte', async (req, res) => {
         const queryGastosPie = `
           WITH Gastos AS (
             SELECT sa.id_autobus, sa.id_vehiculo_particular, ((ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) * l.costo_unitario_final) as costo_total
-            FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0
+            FROM detalle_salida ds JOIN salida_almacen sa ON ds.id_salida = sa.id_salida JOIN lote_refaccion l ON ds.id_lote = l.id_lote WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (ds.cantidad_despachada - COALESCE(ds.cantidad_devuelta, 0)) > 0 AND ds.estado IS DISTINCT FROM 'Cancelado'
             UNION ALL
             SELECT sa.id_autobus, sa.id_vehiculo_particular, ((dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) * dsi.costo_al_momento) as costo_total
             FROM detalle_salida_insumo dsi JOIN salida_almacen sa ON dsi.id_salida = sa.id_salida WHERE sa.fecha_operacion >= $1 AND sa.fecha_operacion < $2 AND (dsi.cantidad_usada - COALESCE(dsi.cantidad_devuelta, 0)) > 0

@@ -79,33 +79,6 @@ router.post('/', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    let updatedStock;
-
-    if (tipo_movimiento === 'Salida') {
-      // Verificar stock antes de restar
-      const stockResult = await client.query('SELECT stock_actual FROM refaccion WHERE id_refaccion = $1 FOR UPDATE', [refaccion_id]);
-      if (stockResult.rows.length === 0) throw new Error('La refacción no existe.');
-      
-      const stockActual = stockResult.rows[0].stock_actual;
-      if (stockActual < cantidad) throw new Error(`Stock insuficiente. Disponible: ${stockActual}`);
-      
-      // Restar stock
-      const updateResult = await client.query(
-        'UPDATE refaccion SET stock_actual = stock_actual - $1 WHERE id_refaccion = $2 RETURNING stock_actual',
-        [cantidad, refaccion_id]
-      );
-      updatedStock = updateResult.rows[0].stock_actual;
-
-    } else { // Si es 'Entrada'
-      // Sumar stock
-      const updateResult = await client.query(
-        'UPDATE refaccion SET stock_actual = stock_actual + $1 WHERE id_refaccion = $2 RETURNING stock_actual',
-        [cantidad, refaccion_id]
-      );
-      updatedStock = updateResult.rows[0].stock_actual;
-    }
-
-    // Insertar el registro del movimiento
     await client.query(
       `INSERT INTO movimiento_refaccion (refaccion_id, empleado_id, tipo_movimiento, cantidad, motivo)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -113,7 +86,7 @@ router.post('/', async (req, res) => {
     );
 
     await client.query('COMMIT');
-    res.status(201).json({ message: 'Movimiento registrado exitosamente', stock_actualizado: updatedStock });
+    res.status(201).json({ message: 'Movimiento registrado (nota: el stock requiere ajuste por lotes)' });
 
   } catch (error) {
     await client.query('ROLLBACK');
@@ -123,6 +96,7 @@ router.post('/', async (req, res) => {
     client.release();
   }
 });
+
 /**
  * @swagger
  * /api/movimientos/{idRefaccion}:
@@ -170,15 +144,17 @@ router.post('/', async (req, res) => {
  *                   type: string
  *                   example: "Error en el servidor"
  */
-
 router.get('/:idRefaccion', async (req, res) => {
   const { idRefaccion } = req.params;
 
   try {
     const query = `
-      SELECT fecha, tipo, cantidad, origen_destino, solicitado_por FROM (
+      SELECT id_detalle, tabla_origen, estado, fecha, tipo, cantidad, origen_destino, solicitado_por FROM (
         -- ENTRADAS
         SELECT 
+          de.id_detalle_entrada as id_detalle,
+          'detalle_entrada' as tabla_origen,
+          de.estado,
           ea.fecha_operacion as fecha, 
           'Entrada' as tipo, 
           de.cantidad_recibida as cantidad, 
@@ -194,6 +170,9 @@ router.get('/:idRefaccion', async (req, res) => {
         
         -- SALIDAS
         SELECT 
+          ds.id_detalle_salida as id_detalle,
+          'detalle_salida' as tabla_origen,
+          ds.estado,
           sa.fecha_operacion as fecha, 
           'Salida' as tipo, 
           ds.cantidad_despachada as cantidad, 
@@ -217,5 +196,107 @@ router.get('/:idRefaccion', async (req, res) => {
   }
 });
 
+// =======================================================
+// CANCELAR MOVIMIENTO (DEVOLUCIÓN O ANULACIÓN)
+// =======================================================
+router.post('/cancelar', async (req, res) => {
+  const { id_detalle, tabla_origen } = req.body;
+
+  if (!id_detalle || !tabla_origen) {
+    return res.status(400).json({ message: 'Faltan parámetros requeridos.' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    if (tabla_origen === 'detalle_salida') {
+      // 1. Obtener la información del detalle de salida
+      const detalleRes = await client.query(
+        'SELECT id_refaccion, cantidad_despachada, estado, id_lote FROM detalle_salida WHERE id_detalle_salida = $1 FOR UPDATE',
+        [id_detalle]
+      );
+
+      if (detalleRes.rows.length === 0) {
+        throw new Error('No se encontró el detalle de la salida.');
+      }
+
+      const detalle = detalleRes.rows[0];
+
+      if (detalle.estado === 'Cancelado') {
+        throw new Error('Este movimiento ya ha sido cancelado.');
+      }
+
+      // 2. Cambiar estado a 'Cancelado'
+      await client.query(
+        'UPDATE detalle_salida SET estado = $1 WHERE id_detalle_salida = $2',
+        ['Cancelado', id_detalle]
+      );
+
+      // 3. Devolver stock al lote
+      if (detalle.id_lote) {
+        await client.query(
+          'UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible + $1 WHERE id_lote = $2',
+          [detalle.cantidad_despachada, detalle.id_lote]
+        );
+      }
+
+    } else if (tabla_origen === 'detalle_entrada') {
+      // 1. Obtener la información del detalle de entrada
+      const detalleRes = await client.query(
+        'SELECT id_refaccion, cantidad_recibida, estado FROM detalle_entrada WHERE id_detalle_entrada = $1 FOR UPDATE',
+        [id_detalle]
+      );
+
+      if (detalleRes.rows.length === 0) {
+        throw new Error('No se encontró el detalle de la entrada.');
+      }
+
+      const detalle = detalleRes.rows[0];
+
+      if (detalle.estado === 'Cancelado') {
+        throw new Error('Este movimiento ya ha sido cancelado.');
+      }
+
+      // Verificar si hay stock suficiente para cancelar la entrada en el lote correspondiente
+      const loteRes = await client.query(
+        'SELECT id_lote, cantidad_disponible FROM lote_refaccion WHERE id_detalle_entrada = $1 FOR UPDATE',
+        [id_detalle]
+      );
+
+      if (loteRes.rows.length > 0) {
+        const lote = loteRes.rows[0];
+        if (lote.cantidad_disponible < detalle.cantidad_recibida) {
+          throw new Error('No se puede cancelar la entrada porque ya se ha utilizado parte del stock ingresado en este lote.');
+        }
+
+        // Restar stock al lote
+        await client.query(
+          'UPDATE lote_refaccion SET cantidad_disponible = cantidad_disponible - $1 WHERE id_lote = $2',
+          [detalle.cantidad_recibida, lote.id_lote]
+        );
+      }
+
+      // 2. Cambiar estado a 'Cancelado'
+      await client.query(
+        'UPDATE detalle_entrada SET estado = $1 WHERE id_detalle_entrada = $2',
+        ['Cancelado', id_detalle]
+      );
+    } else {
+      throw new Error('Tabla de origen no válida.');
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Movimiento cancelado exitosamente, y el inventario ha sido ajustado.' });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al cancelar movimiento:', error);
+    res.status(400).json({ message: error.message || 'Error al procesar la cancelación.' });
+  } finally {
+    client.release();
+  }
+});
 
 module.exports = router;

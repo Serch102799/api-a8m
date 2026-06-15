@@ -87,7 +87,7 @@ router.get('/:idAutobus', async (req, res) => {
           JOIN refaccion r ON ds.id_refaccion = r.id_refaccion
           JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN empleado e ON sa.solicitado_por_id = e.id_empleado
-          WHERE sa.id_autobus = $1
+          WHERE sa.id_autobus = $1 AND ds.estado IS DISTINCT FROM 'Cancelado'
 
           UNION ALL
 
@@ -176,7 +176,7 @@ router.get('/:idAutobus', async (req, res) => {
           FROM detalle_salida ds
           JOIN lote_refaccion l ON ds.id_lote = l.id_lote
           JOIN salida_almacen sa ON ds.id_salida = sa.id_salida
-          WHERE sa.id_autobus = $1
+          WHERE sa.id_autobus = $1 AND ds.estado IS DISTINCT FROM 'Cancelado'
 
           UNION ALL
 
