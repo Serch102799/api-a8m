@@ -24,11 +24,14 @@ router.get('/', async (req, res) => {
         se.iva_monto,
         se.tiene_garantia,
         se.fecha_vencimiento_garantia,
+        se.id_vehiculo_particular,
         a.economico as autobus,
+        vp.propietario as vehiculo_particular,
         p.nombre_proveedor as proveedor,
         e.nombre as registrado_por
       FROM servicio_externo se
-      JOIN autobus a ON se.id_autobus = a.id_autobus
+      LEFT JOIN autobus a ON se.id_autobus = a.id_autobus
+      LEFT JOIN vehiculos_particulares vp ON se.id_vehiculo_particular = vp.id_vehiculo
       LEFT JOIN proveedor p ON se.id_proveedor = p.id_proveedor
       JOIN empleado e ON se.registrado_por_id = e.id_empleado
       ORDER BY se.fecha_servicio DESC, se.id_servicio DESC;
@@ -46,6 +49,7 @@ router.post('/', async (req, res) => {
   // Extraemos todos los campos, incluyendo los nuevos de IVA, Garantía y Km
   const { 
     id_autobus, 
+    id_vehiculo_particular,
     id_proveedor, 
     fecha_servicio, 
     descripcion, 
@@ -62,19 +66,24 @@ router.post('/', async (req, res) => {
   
   const registrado_por_id = req.user.id; // Obtenido del token
 
+  if (!id_autobus && !id_vehiculo_particular) {
+    return res.status(400).json({ message: 'Debe seleccionar un autobús o un vehículo particular.' });
+  }
+
   try {
     const query = `
       INSERT INTO servicio_externo 
-        (id_autobus, id_proveedor, fecha_servicio, descripcion, costo_total, factura_nota, registrado_por_id, 
+        (id_autobus, id_vehiculo_particular, id_proveedor, fecha_servicio, descripcion, costo_total, factura_nota, registrado_por_id, 
          kilometraje_autobus, aplica_iva, subtotal, iva_monto, tiene_garantia, fecha_vencimiento_garantia, dias_garantia)
       VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *;
     `;
     
     // Armamos el arreglo asegurándonos de manejar los nulos/falsos correctamente
     const values = [
-      id_autobus, 
+      id_autobus || null, 
+      id_vehiculo_particular || null,
       id_proveedor || null, 
       fecha_servicio, 
       descripcion, 
@@ -109,7 +118,8 @@ router.post('/', async (req, res) => {
         id_recurso_afectado: nuevoServicio.id_servicio,
         detalles_cambio: {
             mensaje: 'Se registró una factura/nota de taller externo.',
-            id_autobus: id_autobus,
+            id_autobus: id_autobus || null,
+            id_vehiculo_particular: id_vehiculo_particular || null,
             id_proveedor: id_proveedor,
             descripcion: descripcion,
             costo_total: costo_total,
