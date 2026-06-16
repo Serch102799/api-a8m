@@ -25,6 +25,17 @@ router.get('/buscar', verifyToken, async (req, res) => {
     }
 });
 
+router.get('/lista-simple', verifyToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT id_operador, nombre_completo FROM operadores WHERE esta_activo = true ORDER BY nombre_completo ASC'
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error al obtener la lista simple de operadores:', error);
+        res.status(500).json({ message: 'Error al obtener la lista de operadores' });
+    }
+});
 router.get('/', verifyToken, async (req, res) => {
     const { page = 1, limit = 10, search = '', estado = 'activos' } = req.query;
 

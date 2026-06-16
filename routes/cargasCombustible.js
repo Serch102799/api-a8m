@@ -236,7 +236,9 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
         tipo_calculo,
         id_ruta_principal,
         dias_laborados,
-        rutas_realizadas
+        rutas_realizadas,
+        id_autobus,
+        id_empleado_operador
     } = req.body;
 
     console.log('============================================');
@@ -326,10 +328,16 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
         }
 
         const cargaOriginal = cargaOriginalResult.rows[0];
-        const { id_autobus, id_empleado_operador, litros_originales, id_tanque } = cargaOriginal;
+        const original_id_autobus = cargaOriginal.id_autobus;
+        const original_id_empleado_operador = cargaOriginal.id_empleado_operador;
+        const litros_originales = cargaOriginal.litros_originales;
+        const id_tanque = cargaOriginal.id_tanque;
+        
+        const final_id_autobus = id_autobus || original_id_autobus;
+        const final_id_empleado_operador = id_empleado_operador || original_id_empleado_operador;
         
         console.log('✅ Carga encontrada:', {
-            id_autobus,
+            final_id_autobus,
             litros_originales,
             litros_nuevos: litrosNum,
             id_tanque
@@ -455,10 +463,32 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
         const rendimiento_calculado = km_recorridos / litrosNum;
         const desviacion_km = km_recorridos - km_esperados;
 
+        // Calcular litros_desviacion
+        let id_ruta_para_rendimiento = null;
+        if (tipo_calculo === 'dias' && id_ruta_principal) {
+            id_ruta_para_rendimiento = id_ruta_principal;
+        } else if (tipo_calculo === 'vueltas' && rutas_realizadas && rutas_realizadas.length > 0) {
+            id_ruta_para_rendimiento = rutas_realizadas[0].id_ruta;
+        }
+
+        const autobusRes = await client.query('SELECT modelo FROM autobus WHERE id_autobus = $1', [final_id_autobus]);
+        let modeloAutobus = autobusRes.rows.length > 0 ? autobusRes.rows[0].modelo : '';
+
+        const rendResult = await client.query(
+            `SELECT rendimiento_bueno FROM rendimientos_referencia 
+             WHERE TRIM(UPPER(modelo_autobus)) = TRIM(UPPER($1)) AND id_ruta = $2 AND activo = TRUE LIMIT 1`,
+            [modeloAutobus, id_ruta_para_rendimiento]
+        );
+        
+        const rendimiento_ideal = rendResult.rows.length > 0 ? parseFloat(rendResult.rows[0].rendimiento_bueno) : 3.5;
+        const litros_ideales = km_recorridos / rendimiento_ideal;
+        const litros_desviacion = litrosNum - litros_ideales;
+
         console.log('📊 Cálculos realizados:', {
             km_recorridos,
             rendimiento_calculado: rendimiento_calculado.toFixed(2),
-            desviacion_km: desviacion_km.toFixed(2)
+            desviacion_km: desviacion_km.toFixed(2),
+            litros_desviacion: litros_desviacion.toFixed(2)
         });
 
         // ========== ACTUALIZAR LA CARGA ==========
@@ -476,8 +506,11 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
                 desviacion_km = $8,
                 tipo_calculo = $9,
                 id_ruta_principal = $10,
-                dias_laborados = $11
-            WHERE id_carga = $12
+                dias_laborados = $11,
+                id_autobus = $12,
+                id_empleado_operador = $13,
+                litros_desviacion = $14
+            WHERE id_carga = $15
         `;
 
         await client.query(updateQuery, [
@@ -492,6 +525,9 @@ router.put('/:id', [verifyToken, checkRole(['AdminDiesel', 'Almacenista', 'Super
             tipo_calculo || 'vueltas',
             tipo_calculo === 'dias' ? id_ruta_principal : null,
             tipo_calculo === 'dias' ? dias_laborados : null,
+            final_id_autobus,
+            final_id_empleado_operador,
+            litros_desviacion,
             id
         ]);
 
