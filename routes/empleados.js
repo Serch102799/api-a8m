@@ -43,8 +43,8 @@ router.get('/usuario/:nombreUsuario', verifyToken, async (req, res) => {
 
 // 🔒 Crear nuevo empleado
 router.post('/', [
-  //verifyToken, 
-  //checkRole(['Admin', 'SuperUsuario']),
+  verifyToken,
+  checkRole(['Admin', 'SuperUsuario']),
   body('Nombre').notEmpty().withMessage('El nombre es requerido'),
   body('Nombre_Usuario').notEmpty().withMessage('El nombre de usuario es requerido'),
   body('Contrasena_Hash').notEmpty().withMessage('La contraseña es requerida'),
@@ -86,7 +86,7 @@ router.post('/', [
       const nuevoEmpleado = result.rows[0];
 
       // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE USUARIO
-      /* registrarAuditoria({
+      registrarAuditoria({
         id_usuario: req.user.id,
         tipo_accion: 'CREAR',
         recurso_afectado: 'empleado',
@@ -98,7 +98,7 @@ router.post('/', [
           id_rol_asignado: nuevoEmpleado.id_rol
         },
         ip_address: req.ip
-      }); */
+      });
 
       res.status(201).json(nuevoEmpleado);
     } catch (error) {
