@@ -86,7 +86,7 @@ router.post('/', [
       const nuevoEmpleado = result.rows[0];
 
       // 🛡️ REGISTRO DE AUDITORÍA: CREACIÓN DE USUARIO
-      registrarAuditoria({
+      /* registrarAuditoria({
         id_usuario: req.user.id,
         tipo_accion: 'CREAR',
         recurso_afectado: 'empleado',
@@ -98,7 +98,7 @@ router.post('/', [
           id_rol_asignado: nuevoEmpleado.id_rol
         },
         ip_address: req.ip
-      });
+      }); */
 
       res.status(201).json(nuevoEmpleado);
     } catch (error) {
